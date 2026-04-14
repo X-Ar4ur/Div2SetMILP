@@ -1,0 +1,15 @@
+14
+../benchmarks/relatedKey/BlockCipher/GIFT_64.cl
+differential
+relatedKey
+b
+cryptanalysis
+1
+startRound
+1
+endRound
+12
+keySize
+80
+totalRoundNum
+32

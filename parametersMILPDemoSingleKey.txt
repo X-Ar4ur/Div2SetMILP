@@ -1,0 +1,15 @@
+14
+../benchmarks/singleKey/BlockCipher/MIBS.cl
+differential
+singleKey
+b
+cryptanalysis
+1
+startRound
+1
+endRound
+8
+keySize
+80
+totalRoundNum
+32

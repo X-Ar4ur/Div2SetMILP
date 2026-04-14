@@ -1,0 +1,45 @@
+# macOS metadata
+.DS_Store
+._*
+
+# IDEs
+.idea/
+.vscode/
+*.user
+*.suo
+
+# CMake / build outputs
+build/
+out/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+*.cbp
+
+# Compiled objects / binaries
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.dll
+*.dylib
+*.exe
+*.pdb
+*.ilk
+
+# Third-party deps (local copy, too large for repo)
+z3/
+
+# Runtime data / generated results (large, regeneratable)
+data/
+
+# Archives
+*.zip
+*.tar
+*.tar.gz
+
+# Logs
+*.log
