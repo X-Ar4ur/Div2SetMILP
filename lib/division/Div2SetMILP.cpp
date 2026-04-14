@@ -72,7 +72,7 @@ void Div2SetMILP::MGR() {
     // std::cout << "Cipher: " << this->cipherName << std::endl;
     std::cout << "Rounds: " << this->rounds << ", Active bits: " << this->activebits << std::endl;
 
-    preprocess(); // Load reduced inequalities for sboxes
+    preprocess(); // Load reduced inequalities for Sbox
 
     // Setup paths
     std::string milpDir = this->pathPrefix + "milp/";
@@ -90,7 +90,7 @@ void Div2SetMILP::MGR() {
     buildModel();
     iterativeSolver();
 
-    std::cout << "\n===== Division Property MILP Modeling Complete =====" << std::endl;
+    std::cout << "\n===== Division Property MILP Model Generated =====" << std::endl;
 }
 
 
@@ -206,16 +206,23 @@ void Div2SetMILP::programGenModel() {
     }
 }
 
-
+// ProcedureH("round_function"):
+//   parameters:
+//     at(0) = [r]          — 轮计数器（常量）
+//     at(1) = [key0, key1, ..., key31]   — 32 个密钥位
+//     at(2) = [input0, input1, ..., input63]  — 64 个明文输入位
+//   block: [... 三地址码指令序列 ...]
+//   returns: [rtn0, rtn1, ..., rtn63]   — 64 个输出位
 void Div2SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
-    this->constantTan.clear();
-    this->consTanNameMxVal.clear();
+    this->constantTan.clear(); // 记录哪些 TAC 变量应当被视作常量
+    this->consTanNameMxVal.clear(); // 记录常量值的映射
 
     // First parameter is the round number (constant)
     this->consTanNameMxVal[procedureH->getParameters().at(0).at(0)->getNodeName()] = this->rndParamR;
     this->constantTan.push_back(procedureH->getParameters().at(0).at(0)->getNodeName());
 
     // Second parameter is the key (skip key-related operations)
+    // 识别第二个参数“key”的名字前缀，后面用于跳过 key 相关操作
     std::string keyId = procedureH->getParameters().at(1).at(0)->getNodeName().substr(
             0, procedureH->getParameters().at(1).at(0)->getNodeName().find("0"));
 
@@ -269,7 +276,7 @@ void Div2SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                       << "  This is not supported for bit-based 2-subset division property.\n"
                       << "  Use SPN ciphers (PRESENT, GIFT, SKINNY, etc.) for this analysis." << std::endl;
             assert(false);
-        } else if (ele->getOp() == ASTNode::PUSH) {
+        } else if (ele->getOp() == ASTNode::PUSH) {  // 不太了解这一部分
             functionCallFlag = true;
             std::vector<ThreeAddressNodePtr> input, output;
             while (ele->getNodeName() == "sbox_push") {
