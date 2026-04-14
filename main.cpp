@@ -305,11 +305,20 @@ void MILPMGR(std::vector<std::string> params) {
 
 void DivTrailsMGR(std::vector<std::string> params) {
     if (params.empty()) {
-        std::cout << "Usage: ./EasyBC -div CIPHER [rounds] [activebits]" << std::endl;
+        std::cout << "Usage: ./EasyBC -div CIPHER [reductionMethod] [rounds] [activebits]" << std::endl;
         return;
     }
 
     std::string divCipherName = params[0];
+
+    // 可选：第 2 个参数指定约简方法 (1..7)，缺省为 1 (greedy_sun)
+    // 后续 rounds/activebits 依次后移到第 3、4 个参数（仅用于触发 MILP 建模）
+    int reductionMethod = 1;
+    if (params.size() >= 2) {
+        try { reductionMethod = std::stoi(params[1]); }
+        catch (...) { reductionMethod = 1; }
+    }
+    std::cout << "Reduction method: " << reductionMethod << std::endl;
 
     // 查找对应的 .cl 文件名
     std::string RunCipherName = setup::cryptPrimitiveMap[divCipherName];
@@ -360,16 +369,16 @@ void DivTrailsMGR(std::vector<std::string> params) {
                                  sboxDivTrails.getSboxBitSize());
             model.generateInequalities();
             model.saveInequalities(outputDir);
-            model.reduceInequalities();
+            model.reduceInequalities(reductionMethod);
             model.saveReducedInequalities(outputDir);
         }
     }
 
     std::cout << "\n===== Division Trails and Inequalities Calculations Completed =====" << std::endl;
 
-    if (params.size() >= 3) {
-        int divRounds = std::stoi(params[1]);
-        int divActivebits = std::stoi(params[2]);
+    if (params.size() >= 4) {
+        int divRounds = std::stoi(params[2]);
+        int divActivebits = std::stoi(params[3]);
 
         // Run Transformer to get procedureHs for TAC traversal
         std::vector<ProcValuePtr> procs = interpreter.getProcs();
@@ -379,8 +388,8 @@ void DivTrailsMGR(std::vector<std::string> params) {
 
         Div2SetMILP div2set(procedureHs, divRounds, divActivebits, divCipherName);
 
-        // Parse optional parameters: timer and threads
-        for (int i = 3; i < (int)params.size() - 1; i += 2) {
+        // Parse optional parameters: timer and threads (从第 5 个参数开始成对解析)
+        for (int i = 4; i < (int)params.size() - 1; i += 2) {
             if (params[i] == "timer") {
                 div2set.setGurobiTimer(std::stoi(params[i + 1]));
             } else if (params[i] == "threads") {
