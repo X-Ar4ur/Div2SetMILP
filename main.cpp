@@ -305,11 +305,19 @@ void MILPMGR(std::vector<std::string> params) {
 
 void DivTrailsMGR(std::vector<std::string> params) {
     if (params.empty()) {
-        std::cout << "Usage: ./EasyBC -div CIPHER [rounds] [activebits]" << std::endl;
+        std::cout << "Usage: ./EasyBC -div CIPHER [rounds] [activebits] [reductionMethod]" << std::endl;
         return;
     }
 
     std::string divCipherName = params[0];
+
+    // 可选：第 4 个参数指定约简方法 (1..7)，缺省为 1 (greedy_sun)
+    int reductionMethod = 1;
+    if (params.size() >= 4) {
+        try { reductionMethod = std::stoi(params[3]); }
+        catch (...) { reductionMethod = 1; }
+    }
+    std::cout << "Reduction method: " << reductionMethod << std::endl;
 
     // 查找对应的 .cl 文件名
     std::string RunCipherName = setup::cryptPrimitiveMap[divCipherName];
@@ -360,7 +368,7 @@ void DivTrailsMGR(std::vector<std::string> params) {
                                  sboxDivTrails.getSboxBitSize());
             model.generateInequalities();
             model.saveInequalities(outputDir);
-            model.reduceInequalities();
+            model.reduceInequalities(reductionMethod);
             model.saveReducedInequalities(outputDir);
         }
     }

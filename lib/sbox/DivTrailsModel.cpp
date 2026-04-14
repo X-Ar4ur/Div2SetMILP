@@ -19,16 +19,22 @@ void DivTrailsModel::generateInequalities() {
               << " inequalities from SageMath convex hull." << std::endl;
 }
 
-void DivTrailsModel::reduceInequalities() {
-    if (sageIneqs_.empty()) {
-        generateInequalities();
+void DivTrailsModel::reduceInequalities(int method) {
+    reductionMethod_ = method;
+
+    // 方法 1/2/3 以初始 sage 不等式为输入，需要先生成
+    // 方法 4/5/6/7 不依赖初始 sage 不等式
+    if (method == 1 || method == 2 || method == 3) {
+        if (sageIneqs_.empty()) {
+            generateInequalities();
+        }
     }
 
     SboxM divisionSboxModel = buildDivisionSboxModel();
-    reducedIneqs_ = Red::greedy_sun(divisionSboxModel, sageIneqs_);
+    reducedIneqs_ = Red::reduction(method, divisionSboxModel);
 
-    std::cout << "Inequalities reduced: " << sageIneqs_.size()
-              << " -> " << reducedIneqs_.size() << std::endl;
+    std::cout << "Inequalities reduced (method " << method << "): "
+              << sageIneqs_.size() << " -> " << reducedIneqs_.size() << std::endl;
 }
 
 void DivTrailsModel::saveInequalities(const std::string& outputDir) {
@@ -56,7 +62,8 @@ void DivTrailsModel::saveReducedInequalities(const std::string& outputDir) {
         return;
     }
 
-    std::string filepath = outputDir + sboxName_ + "_Reduce_Inequalities.txt";
+    std::string filepath = outputDir + sboxName_ + "_Reduce_M" +
+                           std::to_string(reductionMethod_) + "_Inequalities.txt";
     std::ofstream file(filepath);
     if (!file) {
         std::cout << "Failed to write: " << filepath << std::endl;
