@@ -62,21 +62,27 @@ void DivTrailsModel::saveReducedInequalities(const std::string& outputDir) {
         return;
     }
 
-    std::string filepath = outputDir + sboxName_ + "_Reduce_M" +
-                           std::to_string(reductionMethod_) + "_Inequalities.txt";
-    std::ofstream file(filepath);
-    if (!file) {
-        std::cout << "Failed to write: " << filepath << std::endl;
-        return;
-    }
+    // Archive per-method copy (useful for comparing reductions across methods)
+    std::string archivePath = outputDir + sboxName_ + "_Reduce_M" +
+                              std::to_string(reductionMethod_) + "_Inequalities.txt";
+    // Active copy read by Div2SetMILP::preprocess(); overwritten by the most
+    // recent reduction run (by design: each -div invocation picks one method).
+    std::string activePath  = outputDir + sboxName_ + "_Reduce_Inequalities.txt";
 
-    for (const auto& ineq : reducedIneqs_) {
-        for (int k = 0; k < static_cast<int>(ineq.size()); ++k) {
-            file << ineq[k];
-            if (k < static_cast<int>(ineq.size()) - 1) file << "  ";
+    for (const std::string& filepath : {archivePath, activePath}) {
+        std::ofstream file(filepath);
+        if (!file) {
+            std::cout << "Failed to write: " << filepath << std::endl;
+            return;
         }
-        file << std::endl;
+        for (const auto& ineq : reducedIneqs_) {
+            for (int k = 0; k < static_cast<int>(ineq.size()); ++k) {
+                file << ineq[k];
+                if (k < static_cast<int>(ineq.size()) - 1) file << "  ";
+            }
+            file << std::endl;
+        }
+        file.close();
+        std::cout << "Reduced inequalities saved to: " << filepath << std::endl;
     }
-    file.close();
-    std::cout << "Reduced inequalities saved to: " << filepath << std::endl;
 }

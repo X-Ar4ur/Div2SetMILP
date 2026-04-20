@@ -129,17 +129,16 @@ void SboxDivTrails::createDivisionTrails() {
             }
         }
 
-        // 将 (i, num) 转为二进制向量格式
+        // 将 (i, num) 转为二进制向量格式：位 k ↔ sbox_in[k] / sbox_out[k]
+        // (LSB-first: trail[k] 存的是位权 2^k 的系数，与 .cl 中 sbox_in[k] 对齐)
         for (int num : sqn) {
             std::vector<int> trail(2 * n, 0);
 
-            // i 转为 n 位二进制（高位在前）
             for (int bit = 0; bit < n; ++bit) {
-                trail[n - 1 - bit] = (i >> bit) & 1;
+                trail[bit] = (i >> bit) & 1;
             }
-            // num 转为 n 位二进制（高位在前）
             for (int bit = 0; bit < n; ++bit) {
-                trail[n + n - 1 - bit] = (num >> bit) & 1;
+                trail[n + bit] = (num >> bit) & 1;
             }
 
             divTrails_.push_back(trail);

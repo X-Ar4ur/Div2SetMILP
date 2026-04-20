@@ -306,6 +306,8 @@ void MILPMGR(std::vector<std::string> params) {
 void DivTrailsMGR(std::vector<std::string> params) {
     if (params.empty()) {
         std::cout << "Usage: ./EasyBC -div CIPHER [reductionMethod] [rounds] [activebits]" << std::endl;
+        std::cout << "       activebits: integer (e.g. 60) for MSB-first legacy semantics," << std::endl;
+        std::cout << "                   or R<k> / L<m> / L<m>R<k> for SIMON/Simeck right/left word." << std::endl;
         return;
     }
 
@@ -353,8 +355,10 @@ void DivTrailsMGR(std::vector<std::string> params) {
     std::cout << "\nStep 3: MILP Modeling" << std::endl;
     std::cout << "CipherName: " << divCipherName << std::endl;
 
+    bool hasSbox = false;
     for (auto& box : allBox) {
         if (box.first.substr(0, 4) == "sbox") {
+            hasSbox = true;
             std::string sboxName = box.first;
             std::cout << "\nProcessing " << sboxName << " ..." << std::endl;
 
@@ -374,11 +378,19 @@ void DivTrailsMGR(std::vector<std::string> params) {
         }
     }
 
+    if (!hasSbox) {
+        std::cout << "\nNo S-box detected; skipping inequality generation "
+                     "(SIMON-like cipher)." << std::endl;
+    }
+
     std::cout << "\n===== Division Trails and Inequalities Calculations Completed =====" << std::endl;
 
     if (params.size() >= 4) {
         int divRounds = std::stoi(params[2]);
-        int divActivebits = std::stoi(params[3]);
+        // activebits spec: plain integer (e.g. "60") keeps legacy MSB-first
+        // semantics; "R<k>" / "L<m>R<k>" / "L<m>" target the right/left word
+        // of a Feistel-style cipher (SIMON, Simeck). See Div2SetMILP.cpp.
+        std::string divActivebitsSpec = params[3];
 
         // Run Transformer to get procedureHs for TAC traversal
         std::vector<ProcValuePtr> procs = interpreter.getProcs();
@@ -386,7 +398,7 @@ void DivTrailsMGR(std::vector<std::string> params) {
         transformer.transformProcedures();
         std::vector<ProcedureHPtr> procedureHs = transformer.getProcedureHs();
 
-        Div2SetMILP div2set(procedureHs, divRounds, divActivebits, divCipherName);
+        Div2SetMILP div2set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
 
         // Parse optional parameters: timer and threads (从第 5 个参数开始成对解析)
         for (int i = 4; i < (int)params.size() - 1; i += 2) {

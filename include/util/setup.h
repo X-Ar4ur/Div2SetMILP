@@ -160,4 +160,28 @@ namespace setup{
     static std::string CIPHERS6[] = {"APN_6", "Fides_6", "SC2000_6"};
 
     static std::string CIPHERS8[] = {"AES", "SKINNY_8"};
+
+    // Division-property analysis entry -div <Cipher>: map the CLI cipher
+    // name to the .cl file basename and benchmark subdirectory.
+    static std::unordered_map<std::string, std::string> cryptPrimitiveMap
+            {{"PRESENT",   "PRESENT"},
+             {"Rectangle", "Rectangle"},
+             {"SIMON",     "SIMON"},
+             {"SIMON32",   "SIMON32"},
+             {"SIMON48",   "SIMON48"},
+             {"LBlock",    "LBlock"},
+             {"TWINE",     "TWINE"},
+             {"GIFT",      "GIFT_64"},
+             {"Simeck",    "Simeck"}};
+
+    static std::unordered_map<std::string, std::string> cryptPrimitiveSetMap
+            {{"PRESENT",   "singleKey/BlockCipher"},
+             {"Rectangle", "singleKey/BlockCipher"},
+             {"SIMON",     "singleKey/BlockCipher"},
+             {"SIMON32",   "singleKey/BlockCipher"},
+             {"SIMON48",   "singleKey/BlockCipher"},
+             {"LBlock",    "singleKey/BlockCipher"},
+             {"TWINE",     "singleKey/BlockCipher"},
+             {"GIFT",      "singleKey/BlockCipher"},
+             {"Simeck",    "singleKey/BlockCipher"}};
 }

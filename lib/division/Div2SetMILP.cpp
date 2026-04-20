@@ -5,11 +5,78 @@ extern std::map<std::string, std::vector<int>> allBox;
 extern std::string cipherName;
 
 
-Div2SetMILP::Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds, int activebits, const std::string& cipherName)
-        : procedureHs(std::move(procedureHs)), rounds(rounds), activebits(activebits) {
+Div2SetMILP::Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
+                         const std::string& activebitsSpec, const std::string& cipherName)
+        : procedureHs(std::move(procedureHs)), rounds(rounds), activebitsSpec(activebitsSpec) {
     this->Box = allBox;
     this->cipherName = cipherName;
     this->pathPrefix = std::string(DPATH) + "division/" + this->cipherName + "/";
+}
+
+
+// Parse activebitsSpec and return the list of x-variable indices (x1..x{blockSize})
+// that should be initialized to 1. Recognized forms:
+//   "<N>"         Plain integer: top N bits of the block (MSB-first, legacy).
+//                 Produces x{blockSize}, x{blockSize-1}, ..., x{blockSize-N+1}.
+//   "R<k>"        Right-half: top k bits of the right word. Right word occupies
+//                 the high half of the block (x{wordLen+1}..x{blockSize}).
+//                 Produces x{blockSize}, x{blockSize-1}, ..., x{blockSize-k+1}.
+//   "L<m>R<k>"    Left-half top m bits + right-half top k bits.
+//                 Right word: x{blockSize}..x{blockSize-k+1}.
+//                 Left word:  x{wordLen}..x{wordLen-m+1}.
+//   "L<m>"        Left-half top m bits only (rarely used).
+// wordLen is assumed to be blockSize / 2 (matches SIMON/Simeck/Feistel ciphers).
+std::vector<int> Div2SetMILP::resolveActiveBitVars() const {
+    std::vector<int> active;
+    if (this->activebitsSpec.empty() || this->blockSize <= 0) return active;
+
+    const std::string& s = this->activebitsSpec;
+    bool allDigits = !s.empty();
+    for (char c : s) if (!std::isdigit((unsigned char)c)) { allDigits = false; break; }
+
+    if (allDigits) {
+        int n = std::stoi(s);
+        if (n < 0 || n > this->blockSize) {
+            std::cout << "ERROR: activebits " << n << " out of range [0, " << this->blockSize << "]" << std::endl;
+            assert(false);
+        }
+        for (int i = 0; i < n; ++i) active.push_back(this->blockSize - i);
+        return active;
+    }
+
+    int wordLen = this->blockSize / 2;
+    int lCount = 0, rCount = 0;
+    size_t p = 0;
+
+    if (p < s.size() && s[p] == 'L') {
+        ++p;
+        size_t start = p;
+        while (p < s.size() && std::isdigit((unsigned char)s[p])) ++p;
+        if (start == p) { std::cout << "ERROR: malformed L<m> in '" << s << "'" << std::endl; assert(false); }
+        lCount = std::stoi(s.substr(start, p - start));
+    }
+    if (p < s.size() && s[p] == 'R') {
+        ++p;
+        size_t start = p;
+        while (p < s.size() && std::isdigit((unsigned char)s[p])) ++p;
+        if (start == p) { std::cout << "ERROR: malformed R<k> in '" << s << "'" << std::endl; assert(false); }
+        rCount = std::stoi(s.substr(start, p - start));
+    }
+    if (p != s.size() || (lCount == 0 && rCount == 0)) {
+        std::cout << "ERROR: unrecognized activebits spec '" << s << "'. "
+                  << "Use <N>, R<k>, L<m>, or L<m>R<k>." << std::endl;
+        assert(false);
+    }
+    if (lCount < 0 || lCount > wordLen || rCount < 0 || rCount > wordLen) {
+        std::cout << "ERROR: L/R counts out of range [0, " << wordLen << "] in '" << s << "'" << std::endl;
+        assert(false);
+    }
+
+    // Right-half top k: x{blockSize}, x{blockSize-1}, ..., x{blockSize-k+1}
+    for (int i = 0; i < rCount; ++i) active.push_back(this->blockSize - i);
+    // Left-half top m: x{wordLen},   x{wordLen-1},   ..., x{wordLen-m+1}
+    for (int i = 0; i < lCount; ++i) active.push_back(wordLen - i);
+    return active;
 }
 
 
@@ -70,7 +137,7 @@ void Div2SetMILP::preprocess() {
 void Div2SetMILP::MGR() {
     std::cout << "\n===== Step 3: Start Division Property MILP Modeling =====" << std::endl;
     // std::cout << "Cipher: " << this->cipherName << std::endl;
-    std::cout << "Rounds: " << this->rounds << ", Active bits: " << this->activebits << std::endl;
+    std::cout << "Rounds: " << this->rounds << ", Active bits: " << this->activebitsSpec << std::endl;
 
     preprocess(); // Load reduced inequalities for Sbox
 
@@ -79,9 +146,9 @@ void Div2SetMILP::MGR() {
     (void)system(("mkdir -p " + milpDir).c_str());
 
     this->modelPath = milpDir + this->cipherName + "_" + std::to_string(this->rounds)
-                      + "_" + std::to_string(this->activebits) + ".lp";
+                      + "_" + this->activebitsSpec + ".lp";
     this->resultsPath = milpDir + "result_" + std::to_string(this->rounds)
-                        + "_" + std::to_string(this->activebits) + ".txt";
+                        + "_" + this->activebitsSpec + ".txt";
 
     // Clear model file
     std::ofstream clearFile(this->modelPath, std::ios::trunc);
@@ -123,15 +190,19 @@ void Div2SetMILP::buildModel() {
     // Subject To
     model << "Subject To\n";
 
-    // Initial division property constraints
-    // MSB activebits bits = 1, rest = 0
-    // Input variables are x1, x2, ..., x{blockSize}
-    for (int i = 0; i < this->activebits; ++i) {
-        // MSB first: x{blockSize - i} = 1
-        model << "x" << (this->blockSize - i) << " = 1\n";
+    // Initial division property constraints.
+    // Input variables are x1..x{blockSize}. resolveActiveBitVars() translates
+    // the activebitsSpec ("60" / "R31" / "L1R32") into the set of variable
+    // indices that should be 1; everything else is pinned to 0.
+    std::vector<int> activeVars = this->resolveActiveBitVars();
+    std::set<int> activeSet(activeVars.begin(), activeVars.end());
+    for (int xi : activeVars) {
+        model << "x" << xi << " = 1\n";
     }
-    for (int i = this->activebits; i < this->blockSize; ++i) {
-        model << "x" << (this->blockSize - i) << " = 0\n";
+    for (int xi = 1; xi <= this->blockSize; ++xi) {
+        if (activeSet.find(xi) == activeSet.end()) {
+            model << "x" << xi << " = 0\n";
+        }
     }
 
     // Round function constraints
@@ -730,15 +801,12 @@ void Div2SetMILP::SboxGenModel(const ThreeAddressNodePtr &sbox, const ThreeAddre
         this->xCounter++;
     }
 
-    // Apply division trail inequalities (no A/P variables)
-    // NOTE: The inequality coefficients are in MSB-first order (matching how division trails
-    // are stored: [x_{n-1}, ..., x_0, y_{n-1}, ..., y_0]), but the inputIdx/outputIdx from
-    // extIdxFromTOUINTorBOXINDEX are in LSB-first order (bit0, bit1, ..., bit_{n-1}).
-    // We must reverse them so that ineq[0] maps to the MSB variable, matching the Python
-    // implementation which uses (k*4)+3-u indexing.
-    std::vector<int> revInputIdx(inputIdx.rbegin(), inputIdx.rend());
-    std::vector<int> revOutputIdx(outputIdx.rbegin(), outputIdx.rend());
-    DivMILPcons::divSboxC(this->modelPath, revInputIdx, revOutputIdx, this->sboxDivIneqs[sbox->getNodeName()]);
+    // Apply division trail inequalities.
+    // Division trails are stored LSB-first (SboxDivTrails.cpp): coefficient k
+    // corresponds to sbox_in[k] / sbox_out[k]. inputIdx/outputIdx returned by
+    // extIdxFromTOUINTorBOXINDEX are also indexed so that position k is the
+    // variable bound to sbox_in[k]. They align directly — no reversal.
+    DivMILPcons::divSboxC(this->modelPath, inputIdx, outputIdx, this->sboxDivIneqs[sbox->getNodeName()]);
 }
 
 

@@ -26,7 +26,7 @@ private:
     std::vector<ProcedureHPtr> procedureHs;
 
     int rounds;
-    int activebits;
+    std::string activebitsSpec;
     int blockSize = 0;
 
     int gurobiTimer = 3600 * 24;
@@ -58,7 +58,13 @@ private:
     std::map<std::string, int> consTanNameMxVal;
 
 public:
-    Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds, int activebits, const std::string& cipherName);
+    Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
+                const std::string& activebitsSpec, const std::string& cipherName);
+
+    // Parse activebitsSpec ("60", "R31", "L1R32") into a list of MILP variable
+    // indices (x1..x{blockSize}) that should be set to 1. All other input
+    // variables are set to 0. Returns {} and prints an error if spec is invalid.
+    std::vector<int> resolveActiveBitVars() const;
 
     void setGurobiTimer(int timer) { this->gurobiTimer = timer; }
     void setGurobiThreads(int threads) { this->gurobiThreads = threads; }
