@@ -16,34 +16,128 @@ Div2SetMILP::Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
 
 // Parse activebitsSpec and return the list of x-variable indices (x1..x{blockSize})
 // that should be initialized to 1. Recognized forms:
-//   "<N>"         Plain integer: top N bits of the block (MSB-first, legacy).
-//                 Produces x{blockSize}, x{blockSize-1}, ..., x{blockSize-N+1}.
-//   "R<k>"        Right-half: top k bits of the right word. Right word occupies
-//                 the high half of the block (x{wordLen+1}..x{blockSize}).
-//                 Produces x{blockSize}, x{blockSize-1}, ..., x{blockSize-k+1}.
-//   "L<m>R<k>"    Left-half top m bits + right-half top k bits.
-//                 Right word: x{blockSize}..x{blockSize-k+1}.
-//                 Left word:  x{wordLen}..x{wordLen-m+1}.
-//   "L<m>"        Left-half top m bits only (rarely used).
+//   "<N>"         Plain integer. Semantics is cipher-specific so the EasyBC output
+//                 matches the reference implementation under MILP_Division_Property-master:
+//                   - Rectangle: follows rectangle.py Init(). For i = 0..N-1 activate
+//                     variable[(i+2)%4][15 - i/4]; other state bits are 0. The 4×16
+//                     state maps to n_input via n_input[r*16 + c] = variable[r][c]
+//                     (matching the row-rotation assignment from Rectangle.cl's pbox).
+//                   - LBlock: follows lblock.py Init(). For activebits ≤ 32, the right
+//                     word (y) gets N bits, left word (x) stays 0; for activebits > 32,
+//                     y is full (32) and the remaining (N-32) bits go to x. Within each
+//                     half the pattern is variable[7 - i/4][i % 4] — interpreted as
+//                     two-nibble packing consistent with LBlock.cl.
+//                   - Other ciphers (PRESENT, GIFT, TWINE): top N bits of the block
+//                     (x{blockSize}, x{blockSize-1}, ..., x{blockSize-N+1}). This
+//                     matches present.py / twine.py / gift.py which activate the highest
+//                     N variable indices.
+//   "R<k>"        Right-half: top k bits of the right word. Right word occupies the
+//                 high half of the block (x{wordLen+1}..x{blockSize}). Used for SIMON
+//                 /Simeck activebits <= word_length.
+//   "L<m>R<k>"    Left-half top m bits + right-half top k bits. Used for SIMON/Simeck
+//                 with activebits > word_length.
+//   "L<m>"        Left-half top m bits only.
+//   "hex:<HH..>"  Explicit bitmask. Hex is interpreted big-endian over variable indices:
+//                 the most-significant nibble covers x{blockSize}..x{blockSize-3}, the
+//                 next nibble x{blockSize-4}..x{blockSize-7}, and so on. Bit 1 in the
+//                 mask activates that variable. Useful when the cipher-specific preset
+//                 doesn't match the desired pattern.
 // wordLen is assumed to be blockSize / 2 (matches SIMON/Simeck/Feistel ciphers).
 std::vector<int> Div2SetMILP::resolveActiveBitVars() const {
     std::vector<int> active;
     if (this->activebitsSpec.empty() || this->blockSize <= 0) return active;
 
     const std::string& s = this->activebitsSpec;
+
+    // -------- hex:<HH..> explicit bitmask --------
+    if (s.size() > 4 && s.substr(0, 4) == "hex:") {
+        std::string hex = s.substr(4);
+        // strip optional "0x" / underscores for readability
+        if (hex.size() > 2 && (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X'))) hex = hex.substr(2);
+        std::string clean;
+        for (char c : hex) if (c != '_' && c != ' ') clean.push_back(c);
+        int bitsNeeded = this->blockSize;
+        int hexLen = (bitsNeeded + 3) / 4;
+        if ((int)clean.size() != hexLen) {
+            std::cout << "ERROR: hex mask '" << clean << "' has " << clean.size()
+                      << " nibbles; expected " << hexLen << " for block size " << bitsNeeded << std::endl;
+            assert(false);
+        }
+        // Most-significant nibble covers x{blockSize}..x{blockSize-3}.
+        for (int nib = 0; nib < hexLen; ++nib) {
+            char c = clean[nib];
+            int v;
+            if (c >= '0' && c <= '9') v = c - '0';
+            else if (c >= 'a' && c <= 'f') v = 10 + (c - 'a');
+            else if (c >= 'A' && c <= 'F') v = 10 + (c - 'A');
+            else { std::cout << "ERROR: non-hex char '" << c << "' in mask" << std::endl; assert(false); }
+            // High bit of nibble → first var covered by this nibble.
+            for (int b = 0; b < 4; ++b) {
+                int xi = this->blockSize - nib * 4 - b;
+                if (xi < 1) break;
+                if ((v >> (3 - b)) & 1) active.push_back(xi);
+            }
+        }
+        return active;
+    }
+
     bool allDigits = !s.empty();
     for (char c : s) if (!std::isdigit((unsigned char)c)) { allDigits = false; break; }
 
+    // -------- <N> pure integer: dispatch per cipher to match reference Init() --------
     if (allDigits) {
         int n = std::stoi(s);
         if (n < 0 || n > this->blockSize) {
             std::cout << "ERROR: activebits " << n << " out of range [0, " << this->blockSize << "]" << std::endl;
             assert(false);
         }
+
+        // Rectangle: reference rectangle.py Init() uses variable[(i+2)%4][15 - i/4].
+        // Rectangle.cl assigns rotation-R row r to n_input[r*16 .. r*16+15], matching the
+        // reference's row order (row 0 rot 0, row 1 rot 1, row 2 rot 12, row 3 rot 13).
+        if (this->cipherName == "Rectangle") {
+            if (this->blockSize != 64) {
+                std::cout << "ERROR: Rectangle preset expects block size 64, got " << this->blockSize << std::endl;
+                assert(false);
+            }
+            for (int i = 0; i < n; ++i) {
+                int row = (i + 2) % 4;
+                int col = 15 - (i / 4);
+                int idx = row * 16 + col;  // 0-based n_input index
+                active.push_back(idx + 1);  // x-variable is 1-indexed
+            }
+            return active;
+        }
+
+        // LBlock: reference lblock.py Init() splits activebits between two 32-bit halves
+        // (y = right / low half, x = left / high half). We mirror the reference by
+        // treating x1..x{wordLen} as 'y' and x{wordLen+1}..x{blockSize} as 'x'.
+        // Within each half the pattern is variable[7 - i/4][i%4], which in .cl bit-layout
+        // corresponds to the (i%4)*8 + (7 - i/4) position of the half.
+        if (this->cipherName == "LBlock") {
+            int wordLen = this->blockSize / 2;
+            if (wordLen != 32) {
+                std::cout << "ERROR: LBlock preset expects block size 64, got " << this->blockSize << std::endl;
+                assert(false);
+            }
+            auto halfIdx = [&](int i) -> int {
+                // variable[7 - i/4][i%4] packs nibble-indexed 8×4 layout.
+                // Map back to flat half index: flatOfHalf = (7 - i/4) * 4 + (i % 4).
+                return (7 - (i / 4)) * 4 + (i % 4);
+            };
+            int yActive = std::min(n, 32);
+            int xActive = std::max(0, n - 32);
+            for (int i = 0; i < yActive; ++i) active.push_back(halfIdx(i) + 1);          // y-half
+            for (int i = 0; i < xActive; ++i) active.push_back(wordLen + halfIdx(i) + 1); // x-half
+            return active;
+        }
+
+        // Default (PRESENT / GIFT / TWINE): top N x-variables active.
         for (int i = 0; i < n; ++i) active.push_back(this->blockSize - i);
         return active;
     }
 
+    // -------- L<m>R<k> Feistel/SIMON spec --------
     int wordLen = this->blockSize / 2;
     int lCount = 0, rCount = 0;
     size_t p = 0;
@@ -64,7 +158,7 @@ std::vector<int> Div2SetMILP::resolveActiveBitVars() const {
     }
     if (p != s.size() || (lCount == 0 && rCount == 0)) {
         std::cout << "ERROR: unrecognized activebits spec '" << s << "'. "
-                  << "Use <N>, R<k>, L<m>, or L<m>R<k>." << std::endl;
+                  << "Use <N>, R<k>, L<m>, L<m>R<k>, or hex:<mask>." << std::endl;
         assert(false);
     }
     if (lCount < 0 || lCount > wordLen || rCount < 0 || rCount > wordLen) {
