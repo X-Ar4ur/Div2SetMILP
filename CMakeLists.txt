@@ -20,10 +20,11 @@ INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/z3/include)
 
 INCLUDE_DIRECTORIES(/usr/include/)
 LINK_DIRECTORIES(/usr/lib)
+INCLUDE_DIRECTORIES(/usr/include/jsoncpp)
 
 # s3lab
-INCLUDE_DIRECTORIES(/home/pusun/gurobi1002/gurobi1002/linux64/include)
-LINK_DIRECTORIES(/home/pusun/gurobi1002/gurobi1002/linux64/lib)
+INCLUDE_DIRECTORIES(/opt/gurobi1202/linux64/include)
+LINK_DIRECTORIES(/opt/gurobi1202/linux64/lib)
 
 #add_subdirectory(lib)
 
@@ -35,7 +36,7 @@ FIND_PACKAGE(BISON REQUIRED)
 message( ${CMAKE_CURRENT_SOURCE_DIR} )
 BISON_TARGET(parser lib/language/parser.y ${CMAKE_CURRENT_BINARY_DIR}/parser.cpp
         DEFINES_FILE ${CMAKE_CURRENT_BINARY_DIR}/parser.h
-        )
+)
 FLEX_TARGET(lexer lib/language/lexer.l ${CMAKE_CURRENT_BINARY_DIR}/lexer.cpp)
 
 ADD_FLEX_BISON_DEPENDENCY(lexer parser)
@@ -54,15 +55,17 @@ ADD_EXECUTABLE(EasyBC
         include/differential/DiffSBMILP.h
         include/differential/DiffSWMILP.h
         include/differential/DiffMILPcons.h
+        include/division/Div2SetMILP.h
+        include/division/DivMILPcons.h
         include/sbox/SboxModel.h
-        include/sbox/SboxDivTrails.h
-        include/sbox/DivTrailsModel.h
         include/sbox/SboxExtC.h
         include/sbox/Check.h
         include/sbox/Reduction.h
         include/sbox/superball.h
         include/sbox/superballMGR.h
         include/sbox/SyntaxGuided.h
+        include/sbox/SboxDivTrails.h
+        include/sbox/DivTrailsModel.h
         include/util/utilities.h
         lib/preprocessing/ASTNode.cpp
         lib/preprocessing/ValueCommon.cpp
@@ -70,23 +73,25 @@ ADD_EXECUTABLE(EasyBC
         lib/preprocessing/Transformer.cpp
         lib/branchNum/BranchNum.cpp
         lib/sbox/SboxModel.cpp
-        lib/sbox/SboxDivTrails.cpp
-        lib/sbox/DivTrailsModel.cpp
         lib/sbox/Check.cpp
         lib/sbox/Reduction.cpp
         lib/sbox/superball.cpp
         lib/sbox/superballMGR.cpp
+        lib/sbox/SboxDivTrails.cpp
+        lib/sbox/DivTrailsModel.cpp
         lib/util/utilities.cpp
+        lib/division/DivMILPcons.cpp
+        lib/division/Div2SetMILP.cpp
         lib/differential/DiffSBMILP.cpp
         lib/differential/DiffSWMILP.cpp
         lib/differential/DiffMILPcons.cpp include/differential/DiffRBMILP.h lib/differential/DiffRBMILP.cpp include/linear/LinearMILPcons.h lib/linear/LinearMILPcons.cpp include/linear/LinearSBMILP.h lib/linear/LinearSBMILP.cpp include/differential/DiffRWMILP.h lib/differential/DiffRWMILP.cpp)
 
 
-find_library(gurobi_static NAMES libgurobi_g++5.2.a
-        PATHS /home/pusun/gurobi1002/gurobi1002/linux64/lib)
+find_library(gurobi_static NAMES libgurobi_g++8.5.a
+        PATHS /opt/gurobi1202/linux64/lib)
 
-find_library(gurobi_dynamic NAMES libgurobi100.so
-        PATHS /home/pusun/gurobi1002/gurobi1002/linux64/lib)
+find_library(gurobi_dynamic NAMES libgurobi120.so
+        PATHS /opt/gurobi1202/linux64/lib)
 
 if(NOT gurobi_static)
     message(FATAL_ERROR "Failed to find Gurobi lib")
