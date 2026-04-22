@@ -57,6 +57,26 @@ private:
     int rndParamR;
     std::map<std::string, int> consTanNameMxVal;
 
+    // Phase 5: lazy COPY-on-read for 2-subset division property.
+    //
+    // When a MILP variable is read, we allocate two fresh variables (a, b) and
+    // emit x_live = x_a + x_b (a 2-way COPY). `a` is returned to the consumer;
+    // `b` becomes the new live representative of that bit for later reads.
+    // Chains of 2-way copies compose into an N-way COPY after pinning the
+    // final tail to 0, matching the reference implementation's exact N-way
+    // COPY semantics (each of N fan-out consumers gets a distinct copy).
+    //
+    // Example (fan-out 3, e.g. SIMON's l_input[i] read by p1/p2/p3):
+    //   read 1: X     = a1 + b1; consumer gets a1
+    //   read 2: b1    = a2 + b2; consumer gets a2
+    //   read 3: b2    = a3 + b3; consumer gets a3
+    //   pin:    b3 = 0  (if not carried forward via return aliasing)
+    //   net:    X = a1 + a2 + a3   (exact 3-way COPY)
+    // If the bit IS carried to the next round (e.g. rtn alias), the final
+    // tail becomes the next round's input index instead of being pinned.
+    std::map<int, int> liveChain;  // live MILP idx -> its successor after a split
+    int consumeCopy(int rawIdx);
+
 public:
     Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
                 const std::string& activebitsSpec, const std::string& cipherName);

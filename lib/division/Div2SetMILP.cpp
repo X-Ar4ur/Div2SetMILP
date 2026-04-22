@@ -175,6 +175,23 @@ std::vector<int> Div2SetMILP::resolveActiveBitVars() const {
 
 
 
+// Phase 5: consume one copy of the bit currently represented by rawIdx.
+// Follows any prior splits via liveChain to reach the current live tail,
+// allocates (a, b), emits x_live = x_a + x_b, records liveChain[live] = b,
+// and returns a. Subsequent reads of this bit (via the same raw index or
+// any alias) will follow liveChain to b and split further.
+int Div2SetMILP::consumeCopy(int rawIdx) {
+    if (rawIdx <= 0) return rawIdx;
+    int live = rawIdx;
+    while (this->liveChain.count(live)) live = this->liveChain[live];
+    int a = this->xCounter++;
+    int b = this->xCounter++;
+    DivMILPcons::divCopyC(this->modelPath, live, std::vector<int>{a, b});
+    this->liveChain[live] = b;
+    return a;
+}
+
+
 void Div2SetMILP::preprocess() {
     auto iterator = this->Box.begin();
     while (iterator != this->Box.end()) {
@@ -369,6 +386,34 @@ void Div2SetMILP::programGenModel() {
     for (int & i : this->rtnIdxSave) {
         this->outputBitIndices.push_back(i);
     }
+
+    // Phase 5: pin dead tails to 0.
+    //
+    // A tail is the final endpoint of a liveChain chain: an index that
+    // appears as a value but never as a key in liveChain. For each raw
+    // bit X that was split k times, we emitted a chain
+    //   X = a1 + b1,  b1 = a2 + b2,  ...,  b_{k-1} = a_k + b_k
+    // with a1..a_k each consumed by a reader and b_k left as the tail.
+    // Summing: X = a1 + a2 + ... + a_k + b_k.
+    // If b_k is carried to the final output (present in outputBitIndices)
+    // or was carried forward to become next-round input and subsequently
+    // split again (already a liveChain key), leave it alone. Otherwise it
+    // is a genuinely dead tail — pin it to 0 so the chain telescopes to
+    // an exact k-way COPY: X = a1 + ... + a_k.
+    std::set<int> chainKeys;
+    std::set<int> chainValues;
+    for (const auto& kv : this->liveChain) {
+        chainKeys.insert(kv.first);
+        chainValues.insert(kv.second);
+    }
+    std::set<int> outSet(this->outputBitIndices.begin(), this->outputBitIndices.end());
+    std::ofstream modelApp(this->modelPath, std::ios::app);
+    for (int tail : chainValues) {
+        if (chainKeys.count(tail)) continue;  // not actually a tail (was split further)
+        if (outSet.count(tail)) continue;     // carried into the objective
+        modelApp << "x" << tail << " = 0\n";
+    }
+    modelApp.close();
 }
 
 // ProcedureH("round_function"):
@@ -529,14 +574,20 @@ void Div2SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             functionCallFlag = false;
     }
 
-    // Save return value indices for next round
+    // Save return value indices for next round.
+    // Phase 5: if the bit was split during this round (via consumeCopy),
+    // the raw index stored in tanNameMxIndex is already spent. Follow
+    // liveChain to the current live tail — that's the "remaining value"
+    // of the bit, to be consumed by the next round's reads.
     this->rtnIdxSave.clear();
     this->rtnMxIndex.clear();
     for (const auto& rtn : procedureH->getReturns()) {
         for (const auto &pair: this->tanNameMxIndex) {
             if (rtn->getNodeName() == pair.first) {
-                this->rtnMxIndex[pair.first] = pair.second;
-                this->rtnIdxSave.push_back(pair.second);
+                int idx = pair.second;
+                while (this->liveChain.count(idx)) idx = this->liveChain[idx];
+                this->rtnMxIndex[pair.first] = idx;
+                this->rtnIdxSave.push_back(idx);
             }
         }
     }
@@ -741,6 +792,11 @@ void Div2SetMILP::XORGenModel(const ThreeAddressNodePtr &left, const ThreeAddres
     }
     this->xCounter++;
 
+    // Phase 5: split a fresh copy out of each read operand so repeated reads
+    // of the same underlying bit end up with independent MILP variables.
+    inputIdx1 = consumeCopy(inputIdx1);
+    inputIdx2 = consumeCopy(inputIdx2);
+
     // Division property XOR: x_out - x_in1 - x_in2 = 0
     DivMILPcons::divXorC(this->modelPath, inputIdx1, inputIdx2, outputIdx);
 }
@@ -879,6 +935,10 @@ void Div2SetMILP::ANDGenModel(const ThreeAddressNodePtr &left, const ThreeAddres
     }
     this->xCounter++;
 
+    // Phase 5: split a fresh copy out of each read operand (see XORGenModel).
+    inputIdx1 = consumeCopy(inputIdx1);
+    inputIdx2 = consumeCopy(inputIdx2);
+
     // Division property AND: t >= u, t >= v, t <= u + v
     DivMILPcons::divAndC(this->modelPath, inputIdx1, inputIdx2, outputIdx);
 }
@@ -895,6 +955,11 @@ void Div2SetMILP::SboxGenModel(const ThreeAddressNodePtr &sbox, const ThreeAddre
         this->xCounter++;
     }
 
+    // Phase 5: split a fresh copy out of each input bit. S-box inputs
+    // are consumed reads and must be distinct MILP variables from any
+    // other reader of the same upstream bit.
+    for (int &idx : inputIdx) idx = consumeCopy(idx);
+
     // Apply division trail inequalities.
     // Division trails are stored LSB-first (SboxDivTrails.cpp): coefficient k
     // corresponds to sbox_in[k] / sbox_out[k]. inputIdx/outputIdx returned by
@@ -906,9 +971,13 @@ void Div2SetMILP::SboxGenModel(const ThreeAddressNodePtr &sbox, const ThreeAddre
 
 void Div2SetMILP::PboxGenModel(const ThreeAddressNodePtr &pbox, const ThreeAddressNodePtr &input,
                                 const ThreeAddressNodePtr &output) {
-    // Permutation is just variable reindexing - no constraints generated
+    // Permutation is just variable reindexing, but each bit crossing the
+    // pbox counts as one READ of its upstream bit. Phase 5: peel off a
+    // fresh copy per input bit so SIMON-style repeated pbox uses of the
+    // same l_input bit get independent MILP variables.
     std::vector<int> pboxValue = this->Box[pbox->getNodeName()];
     std::vector<int> inputIdx = extIdxFromTOUINTorBOXINDEX(input);
+    for (int &idx : inputIdx) idx = consumeCopy(idx);
     std::vector<int> outputIdx;
     for (int i = 0; i < (int)pboxValue.size(); ++i)
         outputIdx.push_back(0);
