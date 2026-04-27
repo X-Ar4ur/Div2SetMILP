@@ -109,9 +109,9 @@ std::vector<int> Div2SetMILP::resolveActiveBitVars() const {
             return active;
         }
 
-        // LBlock: reference lblock.py Init() splits activebits between two 32-bit halves
-        // (y = right / low half, x = left / high half). We mirror the reference by
-        // treating x1..x{wordLen} as 'y' and x{wordLen+1}..x{blockSize} as 'x'.
+        // LBlock: reference lblock.py Init() activates the right half (y) first,
+        // then the left half (x). In LBlock.cl, x1..x{wordLen} is the left half
+        // consumed by F, and x{wordLen+1}..x{blockSize} is the right half.
         // Within each half the pattern is variable[7 - i/4][i%4], which in .cl bit-layout
         // corresponds to the (i%4)*8 + (7 - i/4) position of the half.
         if (this->cipherName == "LBlock") {
@@ -127,8 +127,8 @@ std::vector<int> Div2SetMILP::resolveActiveBitVars() const {
             };
             int yActive = std::min(n, 32);
             int xActive = std::max(0, n - 32);
-            for (int i = 0; i < yActive; ++i) active.push_back(halfIdx(i) + 1);          // y-half
-            for (int i = 0; i < xActive; ++i) active.push_back(wordLen + halfIdx(i) + 1); // x-half
+            for (int i = 0; i < yActive; ++i) active.push_back(wordLen + halfIdx(i) + 1); // y/right half
+            for (int i = 0; i < xActive; ++i) active.push_back(halfIdx(i) + 1);           // x/left half
             return active;
         }
 
