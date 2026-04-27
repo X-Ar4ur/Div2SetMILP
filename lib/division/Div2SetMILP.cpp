@@ -982,7 +982,7 @@ void Div2SetMILP::PboxGenModel(const ThreeAddressNodePtr &pbox, const ThreeAddre
     for (int i = 0; i < (int)pboxValue.size(); ++i)
         outputIdx.push_back(0);
     for (int i = 0; i < (int)pboxValue.size(); ++i)
-        outputIdx[pboxValue[i]] = inputIdx[i];
+        outputIdx[i] = inputIdx[pboxValue[i]];
     for (int i = 0; i < (int)outputIdx.size(); ++i)
         this->tanNameMxIndex[output->getNodeName() + "_$B$_" + std::to_string(i)] = outputIdx[i];
 }
