@@ -38,13 +38,13 @@ int main(int argc, const char* argv[]) {
         params.emplace_back(argv[i]);
     }
     // sbox modeling
-    if (argc == 6) {
+    if (argc > 1 and params[0] == "-div") {
+        std::vector<std::string> divParams(params.begin() + 1, params.end());
+        DivTrailsMGR(divParams);
+    } else if (argc == 6) {
         SboxModelingMGR(params);
     } else if (argc >= 8) {
         MILPMGR(params);
-    } else if (argc > 1 and params[0] == "-div") {
-        std::vector<std::string> divParams(params.begin() + 1, params.end());
-        DivTrailsMGR(divParams);
     } else {
         params.clear();
         //std::string path = "../parametersSboxDemo.txt";
