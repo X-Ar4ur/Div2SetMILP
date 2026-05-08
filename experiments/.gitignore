@@ -1,0 +1,6 @@
+# Bench results & logs are large and machine-specific; commit only configs+golden.
+results/
+tables/*.png
+tables/*.pdf
+__pycache__/
+*.pyc

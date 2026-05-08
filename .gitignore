@@ -35,6 +35,8 @@ z3/
 
 # Runtime data / generated results (large, regeneratable)
 data/
+paper/
+paper-zh-draft/
 
 # Archives
 *.zip

@@ -1,4 +1,5 @@
 #include <iostream>
+#include <chrono>
 #include <ASTNode.h>
 #include "Value.h"
 #include "Interpreter.h"
@@ -321,6 +322,17 @@ void DivTrailsMGR(std::vector<std::string> params) {
         catch (...) { reductionMethod = 1; }
     }
     std::cout << "Reduction method: " << reductionMethod << std::endl;
+
+    // Structured bench header — emitted regardless of whether MILP modeling
+    // step runs, so a parser can attribute subsequent [BENCH] phase lines.
+    {
+        std::string _bench_rounds = (params.size() >= 3) ? params[2] : "-";
+        std::string _bench_activebits = (params.size() >= 4) ? params[3] : "-";
+        std::cerr << "[BENCH] config cipher=" << divCipherName
+                  << " reduction=" << reductionMethod
+                  << " rounds=" << _bench_rounds
+                  << " activebits=" << _bench_activebits << std::endl;
+    }
 
     // 查找对应的 .cl 文件名
     std::string RunCipherName = setup::cryptPrimitiveMap[divCipherName];

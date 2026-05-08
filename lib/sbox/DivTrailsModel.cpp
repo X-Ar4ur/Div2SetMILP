@@ -1,5 +1,6 @@
 #include "DivTrailsModel.h"
 #include "Reduction.h"
+#include <chrono>
 
 DivTrailsModel::DivTrailsModel(std::string cipherName, std::string sboxName,
                                std::vector<std::vector<int>> divTrails, int sboxBitSize)
@@ -13,10 +14,18 @@ SboxM DivTrailsModel::buildDivisionSboxModel() const {
 }
 
 void DivTrailsModel::generateInequalities() {
+    auto _bench_t0 = std::chrono::steady_clock::now();
     SboxM divisionSboxModel = buildDivisionSboxModel();
     sageIneqs_ = divisionSboxModel.get_sage_ineqs();
     std::cout << "Inequalities generated: " << sageIneqs_.size()
               << " inequalities from SageMath convex hull." << std::endl;
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=ineq_gen cipher=" << cipherName_
+              << " sbox=" << sboxName_
+              << " elapsed_ms=" << _bench_ms
+              << " n_ineq=" << sageIneqs_.size() << std::endl;
 }
 
 void DivTrailsModel::reduceInequalities(int method) {
@@ -30,11 +39,21 @@ void DivTrailsModel::reduceInequalities(int method) {
         }
     }
 
+    auto _bench_t0 = std::chrono::steady_clock::now();
     SboxM divisionSboxModel = buildDivisionSboxModel();
     reducedIneqs_ = Red::reduction(method, divisionSboxModel);
 
     std::cout << "Inequalities reduced (method " << method << "): "
               << sageIneqs_.size() << " -> " << reducedIneqs_.size() << std::endl;
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=reduce cipher=" << cipherName_
+              << " sbox=" << sboxName_
+              << " method=" << method
+              << " elapsed_ms=" << _bench_ms
+              << " n_ineq_before=" << sageIneqs_.size()
+              << " n_ineq_after=" << reducedIneqs_.size() << std::endl;
 }
 
 void DivTrailsModel::saveInequalities(const std::string& outputDir) {

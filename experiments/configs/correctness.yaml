@@ -1,0 +1,37 @@
+# Table 1 — Correctness reproduction matrix.
+#
+# Each entry triggers `./EasyBC -div <cipher> <reduction> <rounds> <activebits>`,
+# and bench.py compares the resulting balanced-bit set against
+# experiments/golden/<key>.json (key = "<cipher>_R<rounds>_<activebits>").
+#
+# References for the published rounds / balanced-bit patterns:
+#   Xiang et al., CRYPTO 2016 — SIMON, Simeck, PRESENT, Rectangle, LBlock, TWINE
+#   Sun et al.,   ToSC 2017   — refined results
+#   Eskandari et al.          — GIFT
+#
+# Reduction method 1 (greedy_sun) is the default; correctness is independent
+# of the reduction method, so we pin a single method here.
+
+defaults:
+  reduction: 1
+  repeat: 1                # correctness only needs one run
+  timer_sec: 86400
+  threads: 8
+
+runs:
+  # SIMON family (Xiang 2016 Table 7 — best 2-subset BDP rounds)
+  - { cipher: SIMON32,  rounds: 14, activebits: R16,  paper_ref: "Xiang2016 T7" }
+  - { cipher: SIMON48,  rounds: 16, activebits: R24,  paper_ref: "Xiang2016 T7" }
+  - { cipher: SIMON96,  rounds: 19, activebits: R48,  paper_ref: "Xiang2016 T7" }
+  - { cipher: SIMON128, rounds: 22, activebits: R64,  paper_ref: "Xiang2016 T7" }
+
+  # Simeck family (Xiang 2016 Table 7)
+  - { cipher: Simeck32, rounds: 14, activebits: R16,  paper_ref: "Xiang2016 T7" }
+  - { cipher: Simeck48, rounds: 16, activebits: R24,  paper_ref: "Xiang2016 T7" }
+
+  # SPN ciphers (Xiang 2016 / Sun 2017)
+  - { cipher: PRESENT,   rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T6" }
+  - { cipher: Rectangle, rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T6" }
+  - { cipher: LBlock,    rounds: 16, activebits: 60, paper_ref: "Xiang2016 T6" }
+  - { cipher: TWINE,     rounds: 16, activebits: 60, paper_ref: "Xiang2016 T6" }
+  - { cipher: GIFT,      rounds: 9,  activebits: 60, paper_ref: "Eskandari T2" }

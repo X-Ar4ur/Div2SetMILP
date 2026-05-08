@@ -1,5 +1,6 @@
 #include "division/Div2SetMILP.h"
 #include "util/setup.h"
+#include <chrono>
 
 extern std::map<std::string, std::vector<int>> allBox;
 extern std::string cipherName;
@@ -193,6 +194,8 @@ int Div2SetMILP::consumeCopy(int rawIdx) {
 
 
 void Div2SetMILP::preprocess() {
+    auto _bench_t0 = std::chrono::steady_clock::now();
+    int _bench_total_ineqs = 0;
     auto iterator = this->Box.begin();
     while (iterator != this->Box.end()) {
         if (iterator->first.substr(0, 4) == "sbox") {
@@ -237,11 +240,18 @@ void Div2SetMILP::preprocess() {
             file.close();
 
             this->sboxDivIneqs[sboxName] = ineqs;
+            _bench_total_ineqs += (int)ineqs.size();
             std::cout << "Loaded " << ineqs.size() << " reduced inequalities for " << sboxName
                       << " (input=" << sboxInputSize[sboxName] << ", output=" << sboxOutputSize[sboxName] << ")" << std::endl;
         }
         iterator++;
     }
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=preprocess cipher=" << this->cipherName
+              << " elapsed_ms=" << _bench_ms
+              << " n_ineq_loaded=" << _bench_total_ineqs << std::endl;
 }
 
 
@@ -273,6 +283,7 @@ void Div2SetMILP::MGR() {
 
 
 void Div2SetMILP::buildModel() {
+    auto _bench_t0 = std::chrono::steady_clock::now();
     // Step 1: Generate constraints via TAC traversal (writes to modelPath)
     programGenModel();
 
@@ -343,6 +354,16 @@ void Div2SetMILP::buildModel() {
     if (this->dCounter > 1)
         std::cout << ", d1.." << (this->dCounter - 1);
     std::cout << std::endl;
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=build cipher=" << this->cipherName
+              << " rounds=" << this->rounds
+              << " activebits=" << this->activebitsSpec
+              << " elapsed_ms=" << _bench_ms
+              << " n_xvars=" << (this->xCounter - 1)
+              << " n_dvars=" << (this->dCounter - 1)
+              << " block_size=" << this->blockSize << std::endl;
 }
 
 
@@ -993,6 +1014,7 @@ void Div2SetMILP::iterativeSolver() {
 
     time_t startTime = time(NULL);
     clock_t startClock = clock();
+    auto _bench_t0 = std::chrono::steady_clock::now();
 
     GRBEnv env = GRBEnv(true);
     env.set(GRB_IntParam_Threads, this->gurobiThreads);
@@ -1004,9 +1026,22 @@ void Div2SetMILP::iterativeSolver() {
     model.set(GRB_IntParam_MIPFocus, 1);
     model.set(GRB_IntParam_Cuts, 1); // add
 
+    auto _bench_t_loaded = std::chrono::steady_clock::now();
+    long long _bench_load_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t_loaded - _bench_t0).count();
+    int _bench_n_vars = model.get(GRB_IntAttr_NumVars);
+    int _bench_n_cons = model.get(GRB_IntAttr_NumConstrs);
+    std::cerr << "[BENCH] phase=model_load cipher=" << this->cipherName
+              << " rounds=" << this->rounds
+              << " activebits=" << this->activebitsSpec
+              << " elapsed_ms=" << _bench_load_ms
+              << " n_vars=" << _bench_n_vars
+              << " n_cons=" << _bench_n_cons << std::endl;
+
     int counter = 0;
     std::vector<std::string> setZero;
     bool globalFlag = false;
+    int _bench_last_status = -1;
+    int _bench_n_iter = 0;
 
     // Clear result file
     std::ofstream clearResult(this->resultsPath, std::ios::trunc);
@@ -1015,6 +1050,8 @@ void Div2SetMILP::iterativeSolver() {
     while (counter < this->blockSize) {
         model.optimize();
         int status = model.get(GRB_IntAttr_Status);
+        _bench_last_status = status;
+        _bench_n_iter++;
 
         if (status == GRB_OPTIMAL) {
             double objVal = model.get(GRB_DoubleAttr_ObjVal);
@@ -1102,4 +1139,19 @@ void Div2SetMILP::iterativeSolver() {
     std::cout << "Coordinates set to zero: " << setZero.size() << "/" << this->blockSize << std::endl;
     std::cout << "Time: " << wallTime << "s (wall), " << clockTime << "s (clock)" << std::endl;
     std::cout << "Results saved to: " << this->resultsPath << std::endl;
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_solve_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t_loaded).count();
+    long long _bench_total_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=solve cipher=" << this->cipherName
+              << " rounds=" << this->rounds
+              << " activebits=" << this->activebitsSpec
+              << " elapsed_ms=" << _bench_solve_ms
+              << " total_ms=" << _bench_total_ms
+              << " gurobi_status=" << _bench_last_status
+              << " distinguisher_found=" << (globalFlag ? 1 : 0)
+              << " n_zero_coords=" << setZero.size()
+              << " block_size=" << this->blockSize
+              << " n_iter=" << _bench_n_iter
+              << " threads=" << this->gurobiThreads << std::endl;
 }

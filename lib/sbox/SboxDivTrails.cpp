@@ -1,4 +1,5 @@
 #include "SboxDivTrails.h"
+#include <chrono>
 
 SboxDivTrails::SboxDivTrails(std::string name, std::vector<int> sbox)
     : name_(std::move(name)), sbox_(std::move(sbox)) {
@@ -78,6 +79,7 @@ std::vector<std::vector<int>> SboxDivTrails::createANF() {
  *   3. 将 (i, j) 转为二进制向量格式 [i_bits | j_bits]
  */
 void SboxDivTrails::createDivisionTrails() {
+    auto _bench_t0 = std::chrono::steady_clock::now();
     std::vector<std::vector<int>> ANF = createANF();
     int sboxLen = static_cast<int>(sbox_.size());
     int n = sboxBitSize_;
@@ -147,6 +149,12 @@ void SboxDivTrails::createDivisionTrails() {
 
     std::cout << "Division Trails of " << name_ << " computed: "
               << divTrails_.size() << " trails found." << std::endl;
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=trail sbox=" << name_
+              << " elapsed_ms=" << _bench_ms
+              << " n_trails=" << divTrails_.size() << std::endl;
 }
 
 /**
