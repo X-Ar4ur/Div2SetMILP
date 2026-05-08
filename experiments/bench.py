@@ -16,9 +16,9 @@ Usage
 
 Implementation notes
 --------------------
-- The EasyBC binary is expected at ../cmake-build-debug-2080/EasyBC
+- The EasyBC binary is expected at ../build/EasyBC
   (override via --binary or the EASYBC_BINARY env var).
-- Working dir for the subprocess is the repo's `cmake-build-debug-2080/`
+- Working dir for the subprocess is the repo's `build/`
   directory because EasyBC reads `../benchmarks/...` and writes
   `../data/...` relative to its CWD.
 - We capture full stderr and persist it to results/logs/<run_id>.log so
@@ -51,8 +51,8 @@ except ImportError:
 
 HERE = Path(__file__).resolve().parent
 REPO_ROOT = HERE.parent
-DEFAULT_BINARY = REPO_ROOT / "cmake-build-debug-2080" / "EasyBC"
-DEFAULT_CWD = REPO_ROOT / "cmake-build-debug-2080"
+DEFAULT_BINARY = REPO_ROOT / "build" / "EasyBC"
+DEFAULT_CWD = REPO_ROOT / "build"
 RESULTS_DIR = HERE / "results"
 LOG_DIR = RESULTS_DIR / "logs"
 

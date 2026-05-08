@@ -1,65 +1,66 @@
-# EasyBC 2-subset division-property experiments
+# EasyBC 2-subset division-property 实验
 
-This directory holds the experiment harness for the 2-subset bit-based
-division property MILP integral search implemented in `Div2SetMILP`.
+本目录包含 `Div2SetMILP` 实现的 2-subset bit-based division property
+MILP 积分搜索实验框架。
 
-The pipeline is intentionally minimal: the C++ code only emits structured
-`[BENCH]` lines on stderr, and Python scripts here orchestrate runs,
-parse those lines, and produce CSVs / LaTeX tables.
+整个流程有意保持精简：C++ 代码只在 stderr 上输出结构化的 `[BENCH]`
+日志行，本目录中的 Python 脚本负责编排运行、解析这些日志行，并生成 CSV /
+LaTeX 表格。
 
-## Layout
+## 目录结构
 
 ```
 experiments/
-├── README.md              (this file)
+├── README.md              (本文档)
 ├── configs/
-│   ├── correctness.yaml   Table 1 — paper-result reproduction matrix
-│   ├── perf.yaml          Table 2 — phase-by-phase timing matrix (multi-thread sweep)
-│   └── reduction.yaml     Table 3 — S-box reduction-method ablation
-├── bench.py               Matrix runner — invokes ./EasyBC, parses stderr, writes CSV
-├── parse_log.py           Single-log inspector — JSON or human-readable summary
-├── make_tables.py         CSV → LaTeX tables + matplotlib plots
-├── golden/                Ground-truth balanced-bit JSON per config (Table 1 reference)
-├── results/               CSV outputs + per-run logs (gitignore-able)
-└── tables/                Rendered LaTeX / PNG outputs
+│   ├── correctness.yaml   表 1 —— 论文结果复现实验矩阵
+│   ├── perf.yaml          表 2 —— 分阶段计时矩阵（多线程扫描）
+│   └── reduction.yaml     表 3 —— S-box 约简方法消融实验
+├── bench.py               矩阵运行器 —— 调用 ./EasyBC、解析 stderr、写入 CSV
+├── parse_log.py           单日志检查工具 —— 输出 JSON 或人类可读摘要
+├── make_tables.py         CSV → LaTeX 表格 + matplotlib 图
+├── golden/                每个配置的 balanced-bit 标准答案 JSON（表 1 参考）
+├── results/               CSV 输出 + 每次运行的日志（可由 gitignore 忽略）
+└── tables/                渲染后的 LaTeX / PNG 输出
 ```
 
-## Prerequisites
+## 前置条件
 
-- Build EasyBC (Gurobi 12.0.2 set up per repo CMakeLists):
+- 构建 EasyBC（Gurobi 12.0.2 按仓库 CMakeLists 配置，默认使用 `build/`）：
   ```
-  cmake --build cmake-build-debug-2080 --target EasyBC -- -j
+  cmake --build build --target EasyBC -- -j
   ```
-- Python 3.9+ with PyYAML (`pip install pyyaml`); matplotlib only required for plots.
+- Python 3.9+，并安装 PyYAML（`pip install pyyaml`）；只有绘图时才需要
+  matplotlib。
 
-## Quick start
+## 快速开始
 
 ```bash
-# (from repo root)
+# （从仓库根目录执行）
 cd experiments
 
-# 1. Smoke-test correctness (one trial per config)
+# 1. 正确性冒烟测试（每个配置运行一次）
 python bench.py --config configs/correctness.yaml
 
-# 2. Inspect the result of a specific run
+# 2. 检查某次具体运行的结果
 python parse_log.py results/logs/PRESENT_R9_60_m1_t8_trial1_*.log --with-balanced
 
-# 3. Once golden/ is populated, render Table 1
+# 3. 填充 golden/ 后，渲染表 1
 python make_tables.py --table 1 results/correctness_*.csv > tables/table1.tex
 
-# 4. Full performance sweep (5 trials × multiple thread counts)
+# 4. 完整性能扫描（5 次重复 × 多个线程数）
 python bench.py --config configs/perf.yaml
 python make_tables.py --table 2 results/perf_*.csv        > tables/table2.tex
 python make_tables.py --plot scaling results/perf_*.csv
 
-# 5. Reduction-method ablation
+# 5. 约简方法消融实验
 python bench.py --config configs/reduction.yaml
 python make_tables.py --table 3 results/reduction_*.csv   > tables/table3.tex
 ```
 
-## Structured log format
+## 结构化日志格式
 
-Each EasyBC run emits one or more of the following lines on stderr:
+每次 EasyBC 运行会在 stderr 上输出以下一行或多行：
 
 ```
 [BENCH] config cipher=<C> reduction=<M> rounds=<R> activebits=<A>
@@ -72,41 +73,41 @@ Each EasyBC run emits one or more of the following lines on stderr:
 [BENCH] phase=solve      cipher=<C> rounds=<R> activebits=<A> elapsed_ms=<ms> total_ms=<ms> gurobi_status=<S> distinguisher_found=<0|1> n_zero_coords=<N> block_size=<B> n_iter=<N> threads=<T>
 ```
 
-Multiple S-boxes (e.g. LBlock has 10) ⇒ multiple `trail` / `ineq_gen` /
-`reduce` lines per run; `bench.py` aggregates them in the CSV's
-`*_total` columns and `parse_log.py` keeps them broken out by S-box.
+如果一个算法包含多个 S-box（例如 LBlock 有 10 个），则一次运行中会出现多条
+`trail` / `ineq_gen` / `reduce` 日志；`bench.py` 会将它们汇总到 CSV 的
+`*_total` 列中，而 `parse_log.py` 会按 S-box 保留明细。
 
-## Methodology notes (matches the plan)
+## 方法说明（与实验计划一致）
 
-- Repeat each cell 3–5 times; CSV records every trial; `make_tables.py`
-  computes median + (min, max).
-- Gurobi seed defaults to 0 (default in Gurobi 12 is also 0; the seed-
-  variance experiment is a separate ad-hoc run).
-- Single-thread vs 8-thread numbers come from `threads_sweep` in
-  `perf.yaml`; bench.py runs each cell at every listed thread count.
-- Configurations that exceed `timer_sec` are tagged in the CSV
-  (`gurobi_status` ≠ 2 ≠ 3). Mark with † when reporting.
-- Hardware specs and Gurobi version belong in the paper's evaluation
-  intro — record them outside this harness.
+- 每个实验单元重复 3-5 次；CSV 记录每次 trial；`make_tables.py` 计算中位数
+  +（最小值，最大值）。
+- Gurobi seed 默认值为 0（Gurobi 12 的默认值同样为 0；seed 方差实验作为
+  单独的临时实验运行）。
+- 单线程与 8 线程结果来自 `perf.yaml` 中的 `threads_sweep`；`bench.py` 会对
+  每个列出的线程数运行每个实验单元。
+- 超过 `timer_sec` 的配置会在 CSV 中被标记（`gurobi_status` ≠ 2 ≠ 3）。报告
+  时用 † 标注。
+- 硬件规格和 Gurobi 版本应写入论文 evaluation 部分的开头；请在本实验框架
+  之外记录。
 
-## Comparison against the Python reference
+## 与 Python 参考实现对比
 
-To compare with `MILP_Division_Property-master` on the same machine:
+如需在同一台机器上与 `MILP_Division_Property-master` 对比：
 
 ```bash
-# Run the same configs through the reference (outside this repo)
-# then merge its CSV with bench.py's CSV (matching cipher/rounds/activebits)
-# and let make_tables.py emit the speedup column.
+# 在参考实现中运行相同配置（该参考实现在本仓库之外）
+# 然后将其 CSV 与 bench.py 的 CSV 合并（匹配 cipher/rounds/activebits）
+# 再由 make_tables.py 输出 speedup 列。
 ```
 
-`make_tables.py` does not currently auto-join; merge with `pandas` or by
-hand for now. The CSV columns are stable so a `pandas.merge` on
-`(cipher, rounds, activebits, threads)` will work.
+`make_tables.py` 目前不会自动 join；暂时请使用 `pandas` 或手动合并。CSV 列名
+是稳定的，因此可基于 `(cipher, rounds, activebits, threads)` 执行
+`pandas.merge`。
 
-## CI integration
+## CI 集成
 
-The `correctness.yaml` matrix doubles as a regression suite. After a
-clean reproduction, populate `golden/<key>.json` and add to CI:
+`correctness.yaml` 矩阵也可以作为回归测试套件。完成一次干净复现后，填充
+`golden/<key>.json`，并将以下命令加入 CI：
 
 ```bash
 python bench.py --config configs/correctness.yaml --repeat 1
@@ -114,4 +115,4 @@ python make_tables.py --table 1 results/correctness_*.csv | grep -q '\\times' &&
 exit 0
 ```
 
-(Any mismatched balanced-bit set surfaces as `\times` in the LaTeX.)
+（任何不匹配的 balanced-bit 集合都会在 LaTeX 中显示为 `\times`。）
