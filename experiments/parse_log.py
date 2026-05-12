@@ -9,11 +9,12 @@ Usage
 -----
     python parse_log.py results/logs/<run_id>.log
     python parse_log.py results/logs/<run_id>.log --json > summary.json
-    python parse_log.py results/logs/<run_id>.log --balanced  # show balanced bits
+    python parse_log.py results/logs/<run_id>.log --with-balanced  # show balanced bits
 
 Reads result_*.txt from data/division/<cipher>/milp/ when given the
 --with-balanced flag, by recovering (cipher, rounds, activebits) from
-the [BENCH] config line.
+the [BENCH] config line. Balanced bits are parsed as all output bits minus
+the coordinates set to zero by the iterative solver.
 """
 
 from __future__ import annotations
@@ -30,11 +31,26 @@ REPO_ROOT = HERE.parent
 
 BENCH_LINE_RE = re.compile(r"^\[BENCH\]\s+(.*)$")
 KV_RE = re.compile(r"(\w+)=([^\s]+)")
-RESULT_BAL_RE = re.compile(r"^(x\d+)=(\d+)$")
+VAR_RE = re.compile(r"x\d+")
 
 
 def parse_kv(s: str) -> dict[str, str]:
     return dict(KV_RE.findall(s))
+
+
+def natural_var_key(name: str) -> tuple[str, int]:
+    m = re.match(r"([a-zA-Z]+)(\d+)$", name)
+    if not m:
+        return name, 0
+    return m.group(1), int(m.group(2))
+
+
+def sorted_vars(values: list[str]) -> list[str]:
+    return sorted(set(values), key=natural_var_key)
+
+
+def vars_from_line(line: str) -> list[str]:
+    return VAR_RE.findall(line)
 
 
 def parse(text: str) -> dict[str, Any]:
@@ -84,13 +100,34 @@ def read_balanced_bits(cipher: str, rounds: str, activebits: str) -> list[str]:
          / f"result_{rounds}_{activebits}.txt")
     if not p.exists():
         return []
-    bal = []
-    with open(p) as f:
-        for line in f:
-            m = RESULT_BAL_RE.match(line.strip())
-            if m and m.group(2) == "1":
-                bal.append(m.group(1))
-    return sorted(set(bal))
+    output_bits: list[str] = []
+    set_zero: list[str] = []
+    listed_balanced: list[str] = []
+    in_set_zero_block = False
+    for raw in p.read_text().splitlines():
+        line = raw.strip()
+        if not line:
+            in_set_zero_block = False
+            continue
+        lower = line.lower()
+        if lower.startswith("output bits:"):
+            output_bits.extend(vars_from_line(line))
+            in_set_zero_block = False
+        elif lower.startswith("set zero:"):
+            set_zero.extend(vars_from_line(line))
+            in_set_zero_block = False
+        elif lower.startswith("balanced bits:"):
+            listed_balanced.extend(vars_from_line(line))
+            in_set_zero_block = False
+        elif lower.startswith("those are the coordinates set to zero"):
+            in_set_zero_block = True
+        elif lower.startswith("time used") or lower.startswith("integral"):
+            in_set_zero_block = False
+        elif in_set_zero_block:
+            set_zero.extend(vars_from_line(line))
+    if output_bits:
+        return sorted_vars(list(set(output_bits) - set(set_zero)))
+    return sorted_vars(listed_balanced)
 
 
 def fmt_human(s: dict[str, Any]) -> str:

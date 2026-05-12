@@ -59,8 +59,7 @@ LOG_DIR = RESULTS_DIR / "logs"
 BENCH_LINE_RE = re.compile(r"^\[BENCH\]\s+(.*)$")
 KV_RE = re.compile(r"(\w+)=([^\s]+)")
 
-# Output bit lines in result_*.txt look like "x123=1".
-RESULT_BAL_RE = re.compile(r"^(x\d+)=(\d+)$")
+VAR_RE = re.compile(r"x\d+")
 
 
 # --------------------------------------------------------------------------
@@ -83,6 +82,10 @@ def expand_runs(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     Sweeps recognized in `defaults`:
       reduction_sweep : list[int]   (overrides per-run `reduction`)
       threads_sweep   : list[int]   (overrides per-run `threads`)
+      rounds_sweep    : list[int]   (overrides per-run `rounds`)
+
+    A run may also specify `round_start` and `round_end` to expand an
+    inclusive round range, which is useful for boundary-sweep tables.
     """
     defaults = cfg.get("defaults", {})
     base_reductions: list[int] = defaults.get("reduction_sweep") or [
@@ -97,26 +100,42 @@ def expand_runs(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     expanded = []
     for run in cfg["runs"]:
         cipher = run["cipher"]
-        rounds = int(run["rounds"])
+        if "rounds_sweep" in run:
+            per_rounds = [int(r) for r in run["rounds_sweep"]]
+        elif "round_start" in run and "round_end" in run:
+            start = int(run["round_start"])
+            end = int(run["round_end"])
+            if end < start:
+                raise SystemExit(f"{cipher}: round_end must be >= round_start")
+            per_rounds = list(range(start, end + 1))
+        elif "rounds_sweep" in defaults:
+            per_rounds = [int(r) for r in defaults["rounds_sweep"]]
+        else:
+            per_rounds = [int(run["rounds"])]
         activebits = str(run["activebits"])
         per_reds = [run["reduction"]] if "reduction" in run else base_reductions
         per_thrs = [run["threads"]] if "threads" in run else base_threads
-        for red in per_reds:
-            for thr in per_thrs:
-                expanded.append(
-                    {
-                        "cipher": cipher,
-                        "rounds": rounds,
-                        "activebits": activebits,
-                        "reduction": int(red),
-                        "threads": int(thr),
-                        "repeat": repeat,
-                        "timer_sec": timer_sec,
-                        "extras": {k: v for k, v in run.items() if k not in
-                                   ("cipher", "rounds", "activebits",
-                                    "reduction", "threads")},
+        for rounds in per_rounds:
+            for red in per_reds:
+                for thr in per_thrs:
+                    extras = {
+                        k: v for k, v in run.items() if k not in
+                        ("cipher", "rounds", "rounds_sweep", "round_start",
+                         "round_end", "activebits", "reduction", "threads")
                     }
-                )
+                    extras.setdefault("published_round", run.get("rounds", ""))
+                    expanded.append(
+                        {
+                            "cipher": cipher,
+                            "rounds": rounds,
+                            "activebits": activebits,
+                            "reduction": int(red),
+                            "threads": int(thr),
+                            "repeat": repeat,
+                            "timer_sec": timer_sec,
+                            "extras": extras,
+                        }
+                    )
     return expanded
 
 
@@ -162,15 +181,61 @@ def parse_bench_lines(stderr: str) -> dict[str, dict[str, str]]:
 
 def parse_balanced_bits(result_path: Path) -> list[str]:
     """Read the *latest* result_*.txt and return the balanced-bit names."""
+    return parse_result_file(result_path)["balanced_bits"]
+
+
+def natural_var_key(name: str) -> tuple[str, int]:
+    m = re.match(r"([a-zA-Z]+)(\d+)$", name)
+    if not m:
+        return name, 0
+    return m.group(1), int(m.group(2))
+
+
+def sorted_vars(values: Iterable[str]) -> list[str]:
+    return sorted(set(values), key=natural_var_key)
+
+
+def vars_from_line(line: str) -> list[str]:
+    return VAR_RE.findall(line)
+
+
+def parse_result_file(result_path: Path) -> dict[str, list[str]]:
     if not result_path.exists():
-        return []
-    bal: list[str] = []
-    with open(result_path) as f:
-        for line in f:
-            m = RESULT_BAL_RE.match(line.strip())
-            if m and m.group(2) == "1":
-                bal.append(m.group(1))
-    return sorted(set(bal))
+        return {"output_bits": [], "set_zero": [], "balanced_bits": []}
+    output_bits: list[str] = []
+    set_zero: list[str] = []
+    listed_balanced: list[str] = []
+    in_set_zero_block = False
+    for raw in result_path.read_text().splitlines():
+        line = raw.strip()
+        if not line:
+            in_set_zero_block = False
+            continue
+        lower = line.lower()
+        if lower.startswith("output bits:"):
+            output_bits.extend(vars_from_line(line))
+            in_set_zero_block = False
+        elif lower.startswith("set zero:"):
+            set_zero.extend(vars_from_line(line))
+            in_set_zero_block = False
+        elif lower.startswith("balanced bits:"):
+            listed_balanced.extend(vars_from_line(line))
+            in_set_zero_block = False
+        elif lower.startswith("those are the coordinates set to zero"):
+            in_set_zero_block = True
+        elif lower.startswith("time used") or lower.startswith("integral"):
+            in_set_zero_block = False
+        elif in_set_zero_block:
+            set_zero.extend(vars_from_line(line))
+    if output_bits:
+        balanced = set(output_bits) - set(set_zero)
+    else:
+        balanced = set(listed_balanced)
+    return {
+        "output_bits": sorted_vars(output_bits),
+        "set_zero": sorted_vars(set_zero),
+        "balanced_bits": sorted_vars(balanced),
+    }
 
 
 def result_path_for(cipher: str, rounds: int, activebits: str) -> Path:
@@ -187,7 +252,7 @@ def result_path_for(cipher: str, rounds: int, activebits: str) -> Path:
 
 CSV_FIELDS = [
     "run_id", "ts", "cipher", "rounds", "activebits", "reduction", "threads",
-    "trial",
+    "trial", "paper_ref", "slice",
     "trail_ms_total", "trail_n_trails_total",
     "ineq_gen_ms_total", "ineq_gen_n_total",
     "reduce_ms_total", "reduce_n_before_total", "reduce_n_after_total",
@@ -196,6 +261,7 @@ CSV_FIELDS = [
     "model_load_ms", "n_vars", "n_cons",
     "solve_ms", "total_ms",
     "gurobi_status", "distinguisher_found", "n_zero_coords", "n_iter",
+    "output_bits", "set_zero", "balanced_bits", "n_balanced",
     "wall_sec_proc", "exit_code",
 ]
 
@@ -246,6 +312,8 @@ def row_from_run(
         "reduction": expanded_run["reduction"],
         "threads": expanded_run["threads"],
         "trial": trial,
+        "paper_ref": expanded_run.get("extras", {}).get("paper_ref", ""),
+        "slice": expanded_run.get("extras", {}).get("slice", ""),
         "trail_ms_total": trail_agg["elapsed_ms"],
         "trail_n_trails_total": trail_agg["n_trails"],
         "ineq_gen_ms_total": ineq_agg["elapsed_ms"],
@@ -363,12 +431,17 @@ def main() -> int:
 
                 ts_iso = _dt.datetime.now().isoformat(timespec="seconds")
                 row = row_from_run(run_id, run, trial, ts_iso, stderr, rc, wall)
+                result_info = parse_result_file(
+                    result_path_for(run["cipher"], run["rounds"], run["activebits"])
+                )
+                row["output_bits"] = ",".join(result_info["output_bits"])
+                row["set_zero"] = ",".join(result_info["set_zero"])
+                row["balanced_bits"] = ",".join(result_info["balanced_bits"])
+                row["n_balanced"] = len(result_info["balanced_bits"])
                 w.writerow(row)
                 csvf.flush()
 
-                bal = parse_balanced_bits(
-                    result_path_for(run["cipher"], run["rounds"], run["activebits"])
-                )
+                bal = result_info["balanced_bits"]
                 if bal:
                     print(f"        balanced bits ({len(bal)}): "
                           f"{','.join(bal[:8])}{'...' if len(bal) > 8 else ''}")

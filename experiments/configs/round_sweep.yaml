@@ -1,0 +1,24 @@
+# Table 2 — round-by-round distinguisher boundary scan.
+#
+# Each run starts at round 1 and scans up to the published-round neighborhood.
+# The generated table has two rows per cipher: Found and Time.
+
+defaults:
+  reduction: 1
+  repeat: 3
+  timer_sec: 86400
+  threads: 8
+
+runs:
+  - { cipher: PRESENT,   round_start: 1, round_end: 11, activebits: 60, published_round: 9 }
+  - { cipher: Rectangle, round_start: 1, round_end: 11, activebits: 60, published_round: 9 }
+  - { cipher: GIFT,      round_start: 1, round_end: 11, activebits: 60, published_round: 9 }
+  - { cipher: LBlock,    round_start: 1, round_end: 18, activebits: 60, published_round: 16 }
+  - { cipher: TWINE,     round_start: 1, round_end: 18, activebits: 60, published_round: 16 }
+
+  - { cipher: SIMON32,   round_start: 1, round_end: 15, activebits: R16, published_round: 14 }
+  - { cipher: SIMON48,   round_start: 1, round_end: 17, activebits: R24, published_round: 16 }
+  - { cipher: SIMON96,   round_start: 1, round_end: 21, activebits: R48, published_round: 19 }
+  - { cipher: SIMON128,  round_start: 1, round_end: 24, activebits: R64, published_round: 22 }
+  - { cipher: Simeck32,  round_start: 1, round_end: 15, activebits: R16, published_round: 14 }
+  - { cipher: Simeck48,  round_start: 1, round_end: 17, activebits: R24, published_round: 16 }

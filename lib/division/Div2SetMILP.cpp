@@ -1132,6 +1132,31 @@ void Div2SetMILP::iterativeSolver() {
         result << var << "\n";
     }
     result << "\n";
+
+    std::vector<std::string> outputVars;
+    for (int idx : this->outputBitIndices) {
+        outputVars.push_back("x" + std::to_string(idx));
+    }
+    std::set<std::string> zeroSet(setZero.begin(), setZero.end());
+    std::vector<std::string> balancedVars;
+    for (const auto& var : outputVars) {
+        if (zeroSet.find(var) == zeroSet.end()) {
+            balancedVars.push_back(var);
+        }
+    }
+    auto joinVars = [](const std::vector<std::string>& vars) {
+        std::ostringstream oss;
+        for (int i = 0; i < (int)vars.size(); ++i) {
+            if (i > 0) oss << ",";
+            oss << vars[i];
+        }
+        return oss.str();
+    };
+    result << "Output bits: " << joinVars(outputVars) << "\n";
+    result << "Set zero: " << joinVars(setZero) << "\n";
+    result << "Balanced bits: " << joinVars(balancedVars) << "\n";
+    result << "\n";
+
     result << "Time used (clock) = " << clockTime << "s\n";
     result << "Time used (wall)  = " << wallTime << "s\n";
     result.close();

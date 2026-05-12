@@ -13,9 +13,10 @@ LaTeX 表格。
 experiments/
 ├── README.md              (本文档)
 ├── configs/
-│   ├── correctness.yaml   表 1 —— 论文结果复现实验矩阵
-│   ├── perf.yaml          表 2 —— 分阶段计时矩阵（多线程扫描）
-│   └── reduction.yaml     表 3 —— S-box 约简方法消融实验
+│   ├── correctness.yaml   表 1 —— Xiang2016 结果复现实验矩阵
+│   ├── round_sweep.yaml   表 2 —— 从第 1 轮开始的逐轮边界扫描
+│   ├── perf.yaml          表 3 —— 同环境效率矩阵
+│   └── reduction.yaml     表 4 —— S-box 约简方法消融实验
 ├── bench.py               矩阵运行器 —— 调用 ./EasyBC、解析 stderr、写入 CSV
 ├── parse_log.py           单日志检查工具 —— 输出 JSON 或人类可读摘要
 ├── make_tables.py         CSV → LaTeX 表格 + matplotlib 图
@@ -46,16 +47,20 @@ python bench.py --config configs/correctness.yaml
 python parse_log.py results/logs/PRESENT_R9_60_m1_t8_trial1_*.log --with-balanced
 
 # 3. 填充 golden/ 后，渲染表 1
-python make_tables.py --table 1 results/correctness_*.csv > tables/table1.tex
+python make_tables.py --table correctness results/correctness_*.csv > tables/table1.tex
 
-# 4. 完整性能扫描（5 次重复 × 多个线程数）
+# 4. 逐轮边界扫描
+python bench.py --config configs/round_sweep.yaml
+python make_tables.py --table rounds results/round_sweep_*.csv > tables/table2.tex
+
+# 5. 完整性能扫描（5 次重复 × 多个线程数）
 python bench.py --config configs/perf.yaml
-python make_tables.py --table 2 results/perf_*.csv        > tables/table2.tex
+python make_tables.py --table perf results/perf_*.csv     > tables/table3.tex
 python make_tables.py --plot scaling results/perf_*.csv
 
-# 5. 约简方法消融实验
+# 6. 约简方法消融实验
 python bench.py --config configs/reduction.yaml
-python make_tables.py --table 3 results/reduction_*.csv   > tables/table3.tex
+python make_tables.py --table reduction results/reduction_*.csv > tables/table4.tex
 ```
 
 ## 结构化日志格式
@@ -77,6 +82,26 @@ python make_tables.py --table 3 results/reduction_*.csv   > tables/table3.tex
 `trail` / `ineq_gen` / `reduce` 日志；`bench.py` 会将它们汇总到 CSV 的
 `*_total` 列中，而 `parse_log.py` 会按 S-box 保留明细。
 
+## balanced bits 语义
+
+`Div2SetMILP` 的枚举过程会逐个找到可满足的单位输出向量，并把对应坐标
+加入 `setZero` 后继续求解。因此 `result_*.txt` 中的中间 `xN=1` 行不是
+平衡比特本身。最终平衡比特定义为：
+
+```
+balanced_bits = all_output_bits - setZero
+```
+
+新的结果文件会在末尾稳定输出：
+
+```
+Output bits: x...
+Set zero: x...
+Balanced bits: x...
+```
+
+`parse_log.py` 和 `make_tables.py` 都按这个定义解析结果。
+
 ## 方法说明（与实验计划一致）
 
 - 每个实验单元重复 3-5 次；CSV 记录每次 trial；`make_tables.py` 计算中位数
@@ -90,19 +115,17 @@ python make_tables.py --table 3 results/reduction_*.csv   > tables/table3.tex
 - 硬件规格和 Gurobi 版本应写入论文 evaluation 部分的开头；请在本实验框架
   之外记录。
 
-## 与 Python 参考实现对比
+## 与外部实现对比
 
-如需在同一台机器上与 `MILP_Division_Property-master` 对比：
+如需在同一台机器上与 `MILP_Division_Property-master` 或其他参考实现对比：
 
 ```bash
 # 在参考实现中运行相同配置（该参考实现在本仓库之外）
-# 然后将其 CSV 与 bench.py 的 CSV 合并（匹配 cipher/rounds/activebits）
-# 再由 make_tables.py 输出 speedup 列。
+# 将外部实现的时间手工填入论文 LaTeX 表格。
 ```
 
-`make_tables.py` 目前不会自动 join；暂时请使用 `pandas` 或手动合并。CSV 列名
-是稳定的，因此可基于 `(cipher, rounds, activebits, threads)` 执行
-`pandas.merge`。
+当前仓库不自动调用外部实现。EasyBC 的时间由 `perf.yaml` 生成；外部实现时间
+在论文实验表中手工维护，并在表注中说明硬件、求解器版本和 timeout。
 
 ## CI 集成
 
@@ -111,7 +134,7 @@ python make_tables.py --table 3 results/reduction_*.csv   > tables/table3.tex
 
 ```bash
 python bench.py --config configs/correctness.yaml --repeat 1
-python make_tables.py --table 1 results/correctness_*.csv | grep -q '\\times' && exit 1
+python make_tables.py --table correctness results/correctness_*.csv | grep -q '\\times' && exit 1
 exit 0
 ```
 

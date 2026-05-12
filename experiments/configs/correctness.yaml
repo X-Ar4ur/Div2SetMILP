@@ -5,7 +5,7 @@
 # experiments/golden/<key>.json (key = "<cipher>_R<rounds>_<activebits>").
 #
 # References for the published rounds / balanced-bit patterns:
-#   Xiang et al., CRYPTO 2016 — SIMON, Simeck, PRESENT, Rectangle, LBlock, TWINE
+#   Xiang et al., ASIACRYPT 2016 — SIMON, Simeck, PRESENT, Rectangle, LBlock, TWINE
 #   Sun et al.,   ToSC 2017   — refined results
 #   Eskandari et al.          — GIFT
 #
