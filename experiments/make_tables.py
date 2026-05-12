@@ -212,7 +212,7 @@ def table1_correctness(rows: list[dict[str, str]]) -> str:
     """Row per (cipher, rounds, activebits): paper/ours balanced-bit counts."""
     seen: set[tuple] = set()
     lines = [
-        r"\begin{tabular}{llrlrrl}",
+        r"\begin{tabular}{ccccccc}",
         r"\toprule",
         r"Cipher & Ref. & R & Active & |Bal|$_p$ & |Bal|$_o$ & Status \\",
         r"\midrule",
