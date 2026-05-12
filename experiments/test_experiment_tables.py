@@ -1,4 +1,5 @@
 import csv
+import json
 import importlib.util
 import tempfile
 import unittest
@@ -124,6 +125,45 @@ class ExperimentTableTests(unittest.TestCase):
         self.assertIn("7.40", table)
         self.assertIn("12.0", table)
         self.assertIn("1.62", table)
+
+    def test_correctness_table_uses_counts_without_set_columns(self):
+        rows = [
+            {
+                "cipher": "PRESENT",
+                "rounds": "9",
+                "activebits": "60",
+                "paper_ref": "Xiang2016 Table 1",
+                "balanced_bits": "x1",
+                "gurobi_status": "2",
+            }
+        ]
+
+        with tempfile.TemporaryDirectory() as td:
+            old_golden_dir = make_tables.GOLDEN_DIR
+            make_tables.GOLDEN_DIR = Path(td)
+            try:
+                (Path(td) / "PRESENT_R9_60.json").write_text(
+                    json.dumps(
+                        {
+                            "cipher": "PRESENT",
+                            "rounds": 9,
+                            "activebits": "60",
+                            "paper_ref": "Xiang2016 Table 1",
+                            "balanced_bits": [],
+                            "n_balanced": 1,
+                        }
+                    )
+                )
+
+                table = make_tables.table1_correctness(rows)
+            finally:
+                make_tables.GOLDEN_DIR = old_golden_dir
+
+        self.assertIn(r"|Bal|$_p$", table)
+        self.assertIn("PRESENT & Xiang2016 Table 1 & 9 & 60 & 1 & 1 & 2", table)
+        self.assertNotIn("Match", table)
+        self.assertNotIn("Missing", table)
+        self.assertNotIn("Extra", table)
 
 
 if __name__ == "__main__":

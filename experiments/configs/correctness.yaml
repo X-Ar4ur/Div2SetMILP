@@ -29,7 +29,7 @@ runs:
   # Simeck family (Xiang 2016 Table 7)
   - { cipher: Simeck32, rounds: 14, activebits: 31,  paper_ref: "Xiang2016 T1" }
   - { cipher: Simeck48, rounds: 17, activebits: 47,  paper_ref: "Xiang2016 T1" }
-  - { cipher: Simeck64, rounds: 20, activebits: 63,  paper_ref: "Xiang2016 T1" }
+  - { cipher: Simeck, rounds: 20, activebits: 63,  paper_ref: "Xiang2016 T1" }
 
   # SPN ciphers (Xiang 2016 / Sun 2017)
   - { cipher: PRESENT,   rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T1" }

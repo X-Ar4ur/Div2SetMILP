@@ -1,0 +1,14 @@
+{
+  "cipher": "LBlock",
+  "paper_cipher": "LBlock",
+  "rounds": 16,
+  "paper_round_previous": 16,
+  "paper_round_sect5": 16,
+  "activebits": "63",
+  "block_size": 64,
+  "paper_ref": "Xiang2016 Table 1",
+  "balanced_bits": [],
+  "n_balanced": 32,
+  "paper_time": "4.9m",
+  "notes": "Xiang2016 Table 1 reports only the number of balanced bits, not their coordinates."
+}

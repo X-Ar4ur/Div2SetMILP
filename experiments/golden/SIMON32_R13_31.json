@@ -1,0 +1,14 @@
+{
+  "cipher": "SIMON32",
+  "paper_cipher": "SIMON32",
+  "rounds": 13,
+  "paper_round_previous": 15,
+  "paper_round_sect5": 14,
+  "activebits": "31",
+  "block_size": 32,
+  "paper_ref": "Xiang2016 Table 1",
+  "balanced_bits": [],
+  "n_balanced": 16,
+  "paper_time": "4.1s",
+  "notes": "Xiang2016 Table 1 reports only the number of balanced bits, not their coordinates. The implementation round key follows correctness.yaml."
+}

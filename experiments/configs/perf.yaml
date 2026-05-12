@@ -23,7 +23,7 @@ runs:
   - { cipher: SIMON128, rounds: 22, activebits: 127 }
   - { cipher: Simeck32, rounds: 14, activebits: 31 }
   - { cipher: Simeck48, rounds: 16, activebits: 47 }
-  - { cipher: Simeck64, rounds: 16, activebits: 63 }
+  - { cipher: Simeck, rounds: 16, activebits: 63 }
 
   # SPN ciphers
   - { cipher: PRESENT,   rounds: 9,  activebits: 60 }

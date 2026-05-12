@@ -21,6 +21,11 @@ Format:
 `make_tables.py --table 1` joins these against the `result_*.txt` files
 under `data/division/<cipher>/milp/` to populate the correctness table.
 
+Some literature tables, such as Xiang2016 Table 1, report only the number
+of balanced bits and not their coordinates. For those count-only entries,
+set `"balanced_bits": []` and fill `"n_balanced"`; `make_tables.py` will
+display the paper count and compare it with the number produced by EasyBC.
+
 To populate this directory after a clean reproduction run, copy the
 balanced-bit list from `parse_log.py --with-balanced` into the JSON
 template above and commit. We treat the *current verified* run as the

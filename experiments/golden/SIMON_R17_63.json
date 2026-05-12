@@ -1,0 +1,14 @@
+{
+  "cipher": "SIMON",
+  "paper_cipher": "SIMON64",
+  "rounds": 17,
+  "paper_round_previous": 17,
+  "paper_round_sect5": 18,
+  "activebits": "63",
+  "block_size": 64,
+  "paper_ref": "Xiang2016 Table 1",
+  "balanced_bits": [],
+  "n_balanced": 22,
+  "paper_time": "6.7m",
+  "notes": "Xiang2016 Table 1 reports only the number of balanced bits, not their coordinates. The repository uses cipher key SIMON for SIMON64; the implementation round key follows correctness.yaml."
+}

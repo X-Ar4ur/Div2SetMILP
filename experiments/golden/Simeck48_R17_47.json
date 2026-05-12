@@ -1,0 +1,14 @@
+{
+  "cipher": "Simeck48",
+  "paper_cipher": "SIMECK48",
+  "rounds": 17,
+  "paper_round_previous": 12,
+  "paper_round_sect5": 18,
+  "activebits": "47",
+  "block_size": 48,
+  "paper_ref": "Xiang2016 Table 1",
+  "balanced_bits": [],
+  "n_balanced": 5,
+  "paper_time": "56.6s",
+  "notes": "Xiang2016 Table 1 reports only the number of balanced bits, not their coordinates. The implementation round key follows correctness.yaml."
+}

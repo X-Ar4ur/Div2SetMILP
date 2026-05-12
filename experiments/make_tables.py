@@ -4,7 +4,7 @@ Aggregate one or more bench.py CSVs into LaTeX tables and matplotlib plots.
 
 Four table builders, matched to the experiment YAML configs:
 
-  correctness  — pass/fail vs golden balanced-bit set
+  correctness  — balanced-bit count comparison against the paper
   rounds       — round-by-round boundary scan
   perf         — EasyBC timing plus manually maintained external baseline
   reduction    — N_ineq, T_reduce, T_solve across reduction methods
@@ -209,12 +209,12 @@ def read_balanced_bits(cipher: str, rounds: str, activebits: str) -> list[str]:
 
 
 def table1_correctness(rows: list[dict[str, str]]) -> str:
-    """Row per (cipher, rounds, activebits): paper match yes/no."""
+    """Row per (cipher, rounds, activebits): paper/ours balanced-bit counts."""
     seen: set[tuple] = set()
     lines = [
-        r"\begin{tabular}{llrlrrrlll}",
+        r"\begin{tabular}{llrlrrl}",
         r"\toprule",
-        r"Cipher & Ref. & R & Active & |Bal|$_p$ & |Bal|$_o$ & Match & Missing & Extra & Status \\",
+        r"Cipher & Ref. & R & Active & |Bal|$_p$ & |Bal|$_o$ & Status \\",
         r"\midrule",
     ]
     for r in rows:
@@ -231,28 +231,14 @@ def table1_correctness(rows: list[dict[str, str]]) -> str:
         status = r.get("gurobi_status", "")
         if gold is None:
             paper_n = "?"
-            match = r"\textcolor{orange}{N/A}"
-            missing_n = "?"
-            extra_n = "?"
             ref = ref or "no golden"
         else:
             ref = gold.get("paper_ref", ref)
             paper_set = set(gold.get("balanced_bits", []))
-            paper_n = len(paper_set)
-            ours_set = set(ours)
-            if ours_set == paper_set:
-                match = r"\textcolor{teal}{\checkmark}"
-                missing_n = "0"
-                extra_n = "0"
-            else:
-                missing = paper_set - ours_set
-                extra = ours_set - paper_set
-                match = r"\textcolor{red}{\times}"
-                missing_n = str(len(missing))
-                extra_n = str(len(extra))
+            paper_n = gold.get("n_balanced", len(paper_set))
         lines.append(
             f"{cipher} & {ref} & {rounds} & {activebits} & {paper_n} & "
-            f"{len(ours)} & {match} & {missing_n} & {extra_n} & {status} \\\\"
+            f"{len(ours)} & {status} \\\\"
         )
     lines += [r"\bottomrule", r"\end{tabular}"]
     return "\n".join(lines)

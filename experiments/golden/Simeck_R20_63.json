@@ -1,0 +1,14 @@
+{
+  "cipher": "Simeck",
+  "paper_cipher": "SIMECK64",
+  "rounds": 20,
+  "paper_round_previous": 12,
+  "paper_round_sect5": 21,
+  "activebits": "63",
+  "block_size": 64,
+  "paper_ref": "Xiang2016 Table 1",
+  "balanced_bits": [],
+  "n_balanced": 5,
+  "paper_time": "3.0m",
+  "notes": "Xiang2016 Table 1 reports only the number of balanced bits, not their coordinates. The repository uses cipher key Simeck for SIMECK64; the implementation round key follows correctness.yaml."
+}

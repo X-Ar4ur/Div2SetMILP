@@ -1,0 +1,14 @@
+{
+  "cipher": "PRESENT",
+  "paper_cipher": "PRESENT",
+  "rounds": 9,
+  "paper_round_previous": 7,
+  "paper_round_sect5": 9,
+  "activebits": "60",
+  "block_size": 64,
+  "paper_ref": "Xiang2016 Table 1",
+  "balanced_bits": [],
+  "n_balanced": 1,
+  "paper_time": "3.4m",
+  "notes": "Xiang2016 Table 1 reports only the number of balanced bits, not their coordinates."
+}
