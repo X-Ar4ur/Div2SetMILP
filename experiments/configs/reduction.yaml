@@ -1,24 +1,25 @@
-# Table 3 — S-box inequality reduction-method ablation.
+# Table 4 — S-box inequality reduction-method ablation.
 #
-# For each (cipher, rounds, activebits) cell, sweep all 7 reduction methods:
+# For each (cipher, rounds, activebits) cell, sweep reduction methods 1..5:
 #   1 greedy_sun         (Sun greedy)
 #   2 sub_milp
 #   3 convex_hull_tech   (Boura Alg1)
 #   4 logic_cond         (Boura Alg2)
 #   5 comb233            (Alg2+Alg3+Prop3)
-#   6 superball          (requires preset superball input file)
-#   7 external           (Hellman / CNF imported)
 #
 # Scope: only ciphers with S-boxes (SIMON / Simeck have no S-box and would
-# yield identical results across methods). Methods 6/7 are best-effort —
-# bench.py marks them as "skipped: no input data" if their prerequisite
-# files are missing and continues.
+# yield identical results across methods).
+#
+# Methods 6/7 are intentionally excluded for now:
+#   6 superball          (requires preset superball input file)
+#   7 external           (Hellman / CNF imported)
+# They can be re-enabled after prerequisite-file checks are implemented.
 
 defaults:
   repeat: 3
   timer_sec: 86400
   threads: 8
-  reduction_sweep: [1, 2, 3, 4, 5, 6, 7]
+  reduction_sweep: [1, 2, 3, 4, 5]
 
 runs:
   - { cipher: PRESENT,   rounds: 9,  activebits: 60 }

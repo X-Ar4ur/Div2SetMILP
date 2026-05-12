@@ -1,4 +1,4 @@
-# Table 2 — End-to-end performance breakdown matrix.
+# Table 3 — Same-environment efficiency comparison matrix.
 #
 # Each entry is run `repeat` times; bench.py records median + (min, max).
 # Per the plan, we report both 1-thread (fair vs Python ref impl) and
