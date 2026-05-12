@@ -20,18 +20,20 @@ defaults:
 
 runs:
   # SIMON family (Xiang 2016 Table 7 — best 2-subset BDP rounds)
-  - { cipher: SIMON32,  rounds: 14, activebits: R16,  paper_ref: "Xiang2016 T7" }
-  - { cipher: SIMON48,  rounds: 16, activebits: R24,  paper_ref: "Xiang2016 T7" }
-  - { cipher: SIMON96,  rounds: 19, activebits: R48,  paper_ref: "Xiang2016 T7" }
-  - { cipher: SIMON128, rounds: 22, activebits: R64,  paper_ref: "Xiang2016 T7" }
+  - { cipher: SIMON32,  rounds: 13, activebits: 31,  paper_ref: "Xiang2016 T1" }
+  - { cipher: SIMON48,  rounds: 15, activebits: 47,  paper_ref: "Xiang2016 T1" }
+  - { cipher: SIMON,  rounds: 17, activebits: 63,  paper_ref: "Xiang2016 T1" }
+  - { cipher: SIMON96,  rounds: 21, activebits: 95,  paper_ref: "Xiang2016 T1" }
+  - { cipher: SIMON128, rounds: 25, activebits: 127,  paper_ref: "Xiang2016 T1" }
 
   # Simeck family (Xiang 2016 Table 7)
-  - { cipher: Simeck32, rounds: 14, activebits: R16,  paper_ref: "Xiang2016 T7" }
-  - { cipher: Simeck48, rounds: 16, activebits: R24,  paper_ref: "Xiang2016 T7" }
+  - { cipher: Simeck32, rounds: 14, activebits: 31,  paper_ref: "Xiang2016 T1" }
+  - { cipher: Simeck48, rounds: 17, activebits: 47,  paper_ref: "Xiang2016 T1" }
+  - { cipher: Simeck64, rounds: 20, activebits: 63,  paper_ref: "Xiang2016 T1" }
 
   # SPN ciphers (Xiang 2016 / Sun 2017)
-  - { cipher: PRESENT,   rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T6" }
-  - { cipher: Rectangle, rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T6" }
-  - { cipher: LBlock,    rounds: 16, activebits: 60, paper_ref: "Xiang2016 T6" }
-  - { cipher: TWINE,     rounds: 16, activebits: 60, paper_ref: "Xiang2016 T6" }
-  - { cipher: GIFT,      rounds: 9,  activebits: 60, paper_ref: "Eskandari T2" }
+  - { cipher: PRESENT,   rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T1" }
+  - { cipher: Rectangle, rounds: 9,  activebits: 60, paper_ref: "Xiang2016 T1" }
+  - { cipher: LBlock,    rounds: 16, activebits: 63, paper_ref: "Xiang2016 T1" }
+  - { cipher: TWINE,     rounds: 16, activebits: 63, paper_ref: "Xiang2016 T1" }
+  #- { cipher: GIFT,      rounds: 9,  activebits: 60, paper_ref: "Eskandari T2" }

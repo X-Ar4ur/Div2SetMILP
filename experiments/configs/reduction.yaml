@@ -24,6 +24,6 @@ defaults:
 runs:
   - { cipher: PRESENT,   rounds: 9,  activebits: 60 }
   - { cipher: Rectangle, rounds: 9,  activebits: 60 }
-  - { cipher: GIFT,      rounds: 9,  activebits: 60 }
-  - { cipher: LBlock,    rounds: 16, activebits: 60 }
-  - { cipher: TWINE,     rounds: 16, activebits: 60 }
+  #- { cipher: GIFT,      rounds: 9,  activebits: 60 }
+  - { cipher: LBlock,    rounds: 16, activebits: 63 }
+  - { cipher: TWINE,     rounds: 16, activebits: 63 }

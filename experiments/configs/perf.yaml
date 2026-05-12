@@ -1,8 +1,7 @@
 # Table 3 — Same-environment efficiency comparison matrix.
 #
 # Each entry is run `repeat` times; bench.py records median + (min, max).
-# Per the plan, we report both 1-thread (fair vs Python ref impl) and
-# 8-thread (default) numbers via the `threads_sweep` list.
+# This matrix currently reports the default 8-thread numbers.
 #
 # Reduction method is pinned to 1 (greedy_sun) here so per-cipher
 # numbers are directly comparable; reduction-method ablation lives in
@@ -10,35 +9,37 @@
 
 defaults:
   reduction: 1
-  repeat: 5
+  repeat: 3
   timer_sec: 86400
-  threads_sweep: [1, 8]    # bench.py iterates each entry over both thread counts
+  threads_sweep: [8]
   gurobi_seed: 0
 
 runs:
   # SIMON / Simeck — bit-level Feistel, no S-box
-  - { cipher: SIMON32,  rounds: 14, activebits: R16 }
-  - { cipher: SIMON48,  rounds: 16, activebits: R24 }
-  - { cipher: SIMON96,  rounds: 19, activebits: R48 }
-  - { cipher: SIMON128, rounds: 22, activebits: R64 }
-  - { cipher: Simeck32, rounds: 14, activebits: R16 }
-  - { cipher: Simeck48, rounds: 16, activebits: R24 }
+  - { cipher: SIMON32,  rounds: 14, activebits: 31 }
+  - { cipher: SIMON48,  rounds: 16, activebits: 47 }
+  - { cipher: SIMON,  rounds: 16, activebits: 63 }
+  - { cipher: SIMON96,  rounds: 19, activebits: 95 }
+  - { cipher: SIMON128, rounds: 22, activebits: 127 }
+  - { cipher: Simeck32, rounds: 14, activebits: 31 }
+  - { cipher: Simeck48, rounds: 16, activebits: 47 }
+  - { cipher: Simeck64, rounds: 16, activebits: 63 }
 
   # SPN ciphers
   - { cipher: PRESENT,   rounds: 9,  activebits: 60 }
   - { cipher: Rectangle, rounds: 9,  activebits: 60 }
-  - { cipher: LBlock,    rounds: 16, activebits: 60 }
-  - { cipher: TWINE,     rounds: 16, activebits: 60 }
-  - { cipher: GIFT,      rounds: 9,  activebits: 60 }
+  - { cipher: LBlock,    rounds: 16, activebits: 63 }
+  - { cipher: TWINE,     rounds: 16, activebits: 63 }
+  #- { cipher: GIFT,      rounds: 9,  activebits: 60 }
 
   # Scalability slice — same cipher across rounds, for the time-vs-rounds plot.
-  # Useful for the paper's figure showing solve-time growth.
-  - { cipher: PRESENT, rounds: 6, activebits: 60, slice: scaling }
-  - { cipher: PRESENT, rounds: 7, activebits: 60, slice: scaling }
-  - { cipher: PRESENT, rounds: 8, activebits: 60, slice: scaling }
-  - { cipher: PRESENT, rounds: 9, activebits: 60, slice: scaling }
+  # Temporarily disabled so Table 3 only runs the main efficiency comparison.
+  # - { cipher: PRESENT, rounds: 6, activebits: 60, slice: scaling }
+  # - { cipher: PRESENT, rounds: 7, activebits: 60, slice: scaling }
+  # - { cipher: PRESENT, rounds: 8, activebits: 60, slice: scaling }
+  # - { cipher: PRESENT, rounds: 9, activebits: 60, slice: scaling }
 
-  - { cipher: SIMON32, rounds: 11, activebits: R16, slice: scaling }
-  - { cipher: SIMON32, rounds: 12, activebits: R16, slice: scaling }
-  - { cipher: SIMON32, rounds: 13, activebits: R16, slice: scaling }
-  - { cipher: SIMON32, rounds: 14, activebits: R16, slice: scaling }
+  # - { cipher: SIMON32, rounds: 11, activebits: R16, slice: scaling }
+  # - { cipher: SIMON32, rounds: 12, activebits: R16, slice: scaling }
+  # - { cipher: SIMON32, rounds: 13, activebits: R16, slice: scaling }
+  # - { cipher: SIMON32, rounds: 14, activebits: R16, slice: scaling }
