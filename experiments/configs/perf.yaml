@@ -16,14 +16,14 @@ defaults:
 
 runs:
   # SIMON / Simeck — bit-level Feistel, no S-box
-  - { cipher: SIMON32,  rounds: 14, activebits: 31 }
-  - { cipher: SIMON48,  rounds: 16, activebits: 47 }
-  - { cipher: SIMON,  rounds: 16, activebits: 63 }
-  - { cipher: SIMON96,  rounds: 19, activebits: 95 }
-  - { cipher: SIMON128, rounds: 22, activebits: 127 }
+  - { cipher: SIMON32,  rounds: 13, activebits: 31 }
+  - { cipher: SIMON48,  rounds: 15, activebits: 47 }
+  - { cipher: SIMON,  rounds: 17, activebits: 63 }
+  - { cipher: SIMON96,  rounds: 21, activebits: 95 }
+  - { cipher: SIMON128, rounds: 25, activebits: 127 }
   - { cipher: Simeck32, rounds: 14, activebits: 31 }
-  - { cipher: Simeck48, rounds: 16, activebits: 47 }
-  - { cipher: Simeck, rounds: 16, activebits: 63 }
+  - { cipher: Simeck48, rounds: 17, activebits: 47 }
+  - { cipher: Simeck, rounds: 20, activebits: 63 }
 
   # SPN ciphers
   - { cipher: PRESENT,   rounds: 9,  activebits: 60 }
