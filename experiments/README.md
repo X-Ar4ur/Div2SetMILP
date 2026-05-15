@@ -55,7 +55,8 @@ python make_tables.py --table rounds results/round_sweep_*.csv > tables/table2.t
 
 # 5. 完整性能扫描（5 次重复 × 多个线程数）
 python bench.py --config configs/perf.yaml
-python make_tables.py --table perf results/perf_*.csv     > tables/table3.tex
+# 表 3 是 BONC 风格的单密码逐轮指标表；CSV 中有多个密码时需要指定 --cipher。
+python make_tables.py --table perf --cipher PRESENT results/perf_*.csv > tables/table3.tex
 python make_tables.py --plot scaling results/perf_*.csv
 
 # 6. 约简方法消融实验
@@ -114,6 +115,23 @@ Balanced bits: x...
   时用 † 标注。
 - 硬件规格和 Gurobi 版本应写入论文 evaluation 部分的开头；请在本实验框架
   之外记录。
+
+## 表格时间口径
+
+- 表 1 的 `T_Xiang(s)` 是手工维护的 Xiang2016 Python 源码时间，来自
+  `experiments/golden/<key>.json` 中的 `xiang_time_s` 字段；没有填写时显示
+  `manual`。
+- 表 1 的 `T_EasyBC(s)` 与表 2 的 `Time` 口径一致，均来自 CSV 的 `total_ms`：
+  这是 `Div2SetMILP::iterativeSolver()` 内部统计的 Gurobi 阶段总耗时，包含
+  Gurobi 模型读入和迭代求解，不包含 S-box trail、不等式生成/约简、
+  `preprocess()` 或 `buildModel()`。
+- 表 3 的 `T_m(ms)` 是 CSV 的 `build_ms`：从已准备好的 S-box 约简不等式出发，
+  `Div2SetMILP::buildModel()` 遍历 TAC/IR、写出完整 `.lp` 模型并追加 binary
+  声明的时间。它不包含 `T_trail`、`T_ineq`、`T_reduce`、Gurobi 模型读入或
+  Gurobi 求解。
+- 表 3 的 `T_s(ms)` 是 CSV 的 `total_ms`，即与表 2 同口径的 Gurobi 阶段总耗时。
+- 表 3 的 `M_m(kiB)` / `M_s(kiB)` 预留给建模/求解阶段内存；当前 CSV 没有内存字段
+  时表格显示 `--`。
 
 ## 与外部实现对比
 

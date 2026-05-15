@@ -1,7 +1,9 @@
 import csv
 import json
 import importlib.util
+import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 
@@ -17,6 +19,7 @@ def load_module(name: str, path: Path):
     return module
 
 
+sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda _f: {}))
 bench = load_module("bench", HERE / "bench.py")
 make_tables = load_module("make_tables", HERE / "make_tables.py")
 
@@ -98,35 +101,39 @@ class ExperimentTableTests(unittest.TestCase):
         self.assertIn(r"\checkmark", table)
         self.assertIn("T/O", table)
 
-    def test_performance_table_can_include_manual_external_time(self):
+    def test_perf_table_reports_single_cipher_round_metrics(self):
         rows = [
             {
                 "cipher": "PRESENT",
-                "rounds": "9",
+                "rounds": "1",
                 "activebits": "60",
                 "reduction": "1",
                 "threads": "8",
+                "build_ms": "123",
+                "model_mem_kib": "",
+                "n_vars": "200",
+                "n_cons": "300",
                 "total_ms": "7400",
-                "solve_ms": "6800",
-                "gurobi_status": "2",
-                "exit_code": "0",
+                "solve_mem_kib": "",
+                "n_iter": "2",
             }
         ]
-        external = {
-            ("PRESENT", "9", "60"): {
-                "external_time": "12.0",
-                "notes": "manual baseline",
-            }
-        }
 
-        table = make_tables.table_performance_comparison(rows, external)
+        table = make_tables.table_performance_metrics(rows, cipher="PRESENT")
 
-        self.assertIn("PRESENT", table)
-        self.assertIn("7.40", table)
-        self.assertIn("12.0", table)
-        self.assertIn("1.62", table)
+        self.assertIn(r"R & T\_m(ms) & M\_m(kiB) & N\_v & N\_c & T\_s(ms) & M\_s(kiB) & Iter.", table)
+        self.assertIn("1 & 123 & -- & 200 & 300 & 7400 & -- & 2", table)
 
-    def test_correctness_table_uses_counts_without_set_columns(self):
+    def test_perf_table_requires_cipher_when_multiple_ciphers_present(self):
+        rows = [
+            {"cipher": "PRESENT", "rounds": "1", "activebits": "60"},
+            {"cipher": "TWINE", "rounds": "1", "activebits": "60"},
+        ]
+
+        with self.assertRaisesRegex(ValueError, "PRESENT, TWINE"):
+            make_tables.table_performance_metrics(rows)
+
+    def test_correctness_table_reports_times_and_ref_last(self):
         rows = [
             {
                 "cipher": "PRESENT",
@@ -134,7 +141,7 @@ class ExperimentTableTests(unittest.TestCase):
                 "activebits": "60",
                 "paper_ref": "Xiang2016 Table 1",
                 "balanced_bits": "x1",
-                "gurobi_status": "2",
+                "total_ms": "7400",
             }
         ]
 
@@ -151,6 +158,7 @@ class ExperimentTableTests(unittest.TestCase):
                             "paper_ref": "Xiang2016 Table 1",
                             "balanced_bits": [],
                             "n_balanced": 1,
+                            "xiang_time_s": "12.0",
                         }
                     )
                 )
@@ -160,7 +168,12 @@ class ExperimentTableTests(unittest.TestCase):
                 make_tables.GOLDEN_DIR = old_golden_dir
 
         self.assertIn(r"|Bal|$_p$", table)
-        self.assertIn("PRESENT & Xiang2016 Table 1 & 9 & 60 & 1 & 1 & 2", table)
+        self.assertIn(r"T\_Xiang(s)", table)
+        self.assertIn(r"T\_EasyBC(s)", table)
+        self.assertIn("PRESENT & 9 & 60 & 1 & 1 & 12.0 & 7.40 & Xiang2016 Table 1", table)
+        header = next(line for line in table.splitlines() if line.startswith("Cipher &"))
+        self.assertTrue(header.endswith(r"Ref. \\"))
+        self.assertNotIn("Status", table)
         self.assertNotIn("Match", table)
         self.assertNotIn("Missing", table)
         self.assertNotIn("Extra", table)

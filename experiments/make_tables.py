@@ -6,14 +6,14 @@ Four table builders, matched to the experiment YAML configs:
 
   correctness  — balanced-bit count comparison against the paper
   rounds       — round-by-round boundary scan
-  perf         — EasyBC timing plus manually maintained external baseline
-  reduction    — N_ineq, T_reduce, T_solve across reduction methods
+  perf         — BONC-style per-round model/solver metrics for one cipher
+  reduction    — inequality counts, model size, and solve time by method
 
 Usage
 -----
     python make_tables.py --table correctness results/correctness_*.csv > tables/table1.tex
     python make_tables.py --table rounds results/round_sweep_*.csv      > tables/table2.tex
-    python make_tables.py --table perf results/perf_*.csv               > tables/table3.tex
+    python make_tables.py --table perf --cipher PRESENT results/perf_*.csv > tables/table3.tex
     python make_tables.py --table reduction results/reduction_*.csv     > tables/table4.tex
     python make_tables.py --plot scaling results/perf_*.csv   # writes tables/scaling.png
 
@@ -208,27 +208,40 @@ def read_balanced_bits(cipher: str, rounds: str, activebits: str) -> list[str]:
     return parse_result_file(result_path_for(cipher, rounds, activebits))["balanced_bits"]
 
 
+def fmt_seconds_exact(ms: float) -> str:
+    if ms != ms:
+        return "--"
+    return f"{ms / 1000.0:.2f}"
+
+
 def table1_correctness(rows: list[dict[str, str]]) -> str:
-    """Row per (cipher, rounds, activebits): paper/ours balanced-bit counts."""
-    seen: set[tuple] = set()
-    lines = [
-        r"\begin{tabular}{ccccccc}",
-        r"\toprule",
-        r"Cipher & Ref. & R & Active & |Bal|$_p$ & |Bal|$_o$ & Status \\",
-        r"\midrule",
-    ]
+    """Row per (cipher, rounds, activebits): reproduction counts and timing.
+
+    T_EasyBC(s) uses the same timing definition as the round-sweep table:
+    the median `total_ms` emitted by Div2SetMILP::iterativeSolver, converted
+    to seconds. T_Xiang(s) is manually maintained in the golden JSON as
+    `xiang_time_s`.
+    """
+    cells: dict[tuple[str, str, str], list[dict[str, str]]] = defaultdict(list)
     for r in rows:
         if r.get("paper_ref", "").startswith("Eskandari"):
             continue
-        key = (r["cipher"], r["rounds"], r["activebits"])
-        if key in seen:
-            continue
-        seen.add(key)
+        cells[(r["cipher"], r["rounds"], r["activebits"])].append(r)
+
+    lines = [
+        r"\begin{tabular}{cccccccc}",
+        r"\toprule",
+        r"Cipher & R & Active & |Bal|$_p$ & |Bal|$_o$ & T\_Xiang(s) & T\_EasyBC(s) & Ref. \\",
+        r"\midrule",
+    ]
+    for key in sorted(cells):
+        cell = cells[key]
+        r = cell[-1]
         cipher, rounds, activebits = key
         ours = balanced_bits_for_row(r)
         gold = load_golden(cipher, rounds, activebits)
         ref = r.get("paper_ref") or r.get("ref") or ""
-        status = r.get("gurobi_status", "")
+        xiang_time = "manual"
         if gold is None:
             paper_n = "?"
             ref = ref or "no golden"
@@ -236,9 +249,11 @@ def table1_correctness(rows: list[dict[str, str]]) -> str:
             ref = gold.get("paper_ref", ref)
             paper_set = set(gold.get("balanced_bits", []))
             paper_n = gold.get("n_balanced", len(paper_set))
+            xiang_time = str(gold.get("xiang_time_s", "manual"))
+        easybc_time = fmt_seconds_exact(stat_ms(cell, "total_ms")[0])
         lines.append(
-            f"{cipher} & {ref} & {rounds} & {activebits} & {paper_n} & "
-            f"{len(ours)} & {status} \\\\"
+            f"{cipher} & {rounds} & {activebits} & {paper_n} & "
+            f"{len(ours)} & {xiang_time} & {easybc_time} & {ref} \\\\"
         )
     lines += [r"\bottomrule", r"\end{tabular}"]
     return "\n".join(lines)
@@ -385,8 +400,68 @@ def table_performance_comparison(
     return "\n".join(lines)
 
 
+def fmt_int_stat(rows: list[dict[str, str]], col: str) -> str:
+    med = stat_ms(rows, col)[0]
+    if med != med:
+        return "--"
+    return str(int(round(med)))
+
+
+def table_performance_metrics(rows: list[dict[str, str]], cipher: str | None = None) -> str:
+    """BONC-style per-round metrics for a single cipher.
+
+    T_m(ms) is `build_ms`: Div2SetMILP::buildModel time for traversing the
+    transformed program and writing the complete .lp model after S-box
+    inequalities have already been generated/reduced. T_s(ms) is `total_ms`,
+    the same time reported by the round-sweep table: Gurobi model load plus
+    the iterative optimization loop inside Div2SetMILP::iterativeSolver.
+    """
+    ciphers = sorted({r.get("cipher", "") for r in rows if r.get("cipher", "")})
+    if cipher is None:
+        if len(ciphers) != 1:
+            raise ValueError("select one cipher with --cipher; available: " + ", ".join(ciphers))
+        cipher = ciphers[0]
+
+    selected = [r for r in rows if r.get("cipher") == cipher]
+    if not selected:
+        raise ValueError(f"no rows found for cipher {cipher}")
+
+    cells: dict[tuple[int, str], list[dict[str, str]]] = defaultdict(list)
+    for r in selected:
+        cells[(to_int(r.get("rounds", "")), r.get("activebits", ""))].append(r)
+
+    active_values = sorted({active for _round, active in cells})
+    if len(active_values) > 1:
+        raise ValueError(
+            f"table perf expects one activebits value for {cipher}; found: "
+            + ", ".join(active_values)
+        )
+
+    lines = [
+        r"\begin{tabular}{rrrrrrrr}",
+        r"\toprule",
+        r"R & T\_m(ms) & M\_m(kiB) & N\_v & N\_c & T\_s(ms) & M\_s(kiB) & Iter. \\",
+        r"\midrule",
+    ]
+    for key in sorted(cells):
+        round_no, _activebits = key
+        cell = cells[key]
+        lines.append(
+            f"{round_no} & "
+            f"{fmt_int_stat(cell, 'build_ms')} & "
+            f"{fmt_int_stat(cell, 'model_mem_kib')} & "
+            f"{fmt_int_stat(cell, 'n_vars')} & "
+            f"{fmt_int_stat(cell, 'n_cons')} & "
+            f"{fmt_int_stat(cell, 'total_ms')} & "
+            f"{fmt_int_stat(cell, 'solve_mem_kib')} & "
+            f"{fmt_int_stat(cell, 'n_iter')} \\\\"
+        )
+    lines += [r"\bottomrule", r"\end{tabular}"]
+    return "\n".join(lines)
+
+
 # --------------------------------------------------------------------------
-# Reduction-method ablation (Table 3)
+# Reduction-method ablation (Table 4)
 # --------------------------------------------------------------------------
 
 
@@ -510,6 +585,8 @@ def main() -> int:
                     help="Emit Table N as LaTeX to stdout")
     ap.add_argument("--plot", choices=["scaling"],
                     help="Emit a matplotlib figure under tables/")
+    ap.add_argument("--cipher",
+                    help="Cipher to render for --table perf (required when the CSV has multiple ciphers)")
     args = ap.parse_args()
 
     rows = load_rows(args.csv)
@@ -522,7 +599,11 @@ def main() -> int:
     elif args.table in ("2", "rounds"):
         print(table_round_sweep(rows))
     elif args.table in ("3", "perf"):
-        print(table_performance_comparison(rows))
+        try:
+            print(table_performance_metrics(rows, cipher=args.cipher))
+        except ValueError as exc:
+            print(f"ERROR: {exc}", file=sys.stderr)
+            return 2
     elif args.table in ("4", "reduction"):
         print(table3_reduction(rows))
     elif args.plot == "scaling":
