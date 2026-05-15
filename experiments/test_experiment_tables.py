@@ -25,6 +25,15 @@ make_tables = load_module("make_tables", HERE / "make_tables.py")
 
 
 class ExperimentTableTests(unittest.TestCase):
+    def test_perf_config_is_single_cipher_round_sweep(self):
+        cfg_text = (HERE / "configs" / "perf.yaml").read_text()
+
+        self.assertIn("round_start", cfg_text)
+        self.assertIn("round_end", cfg_text)
+        self.assertIn("cipher: PRESENT", cfg_text)
+        self.assertNotIn("cipher: SIMON32", cfg_text)
+        self.assertNotIn("cipher: TWINE", cfg_text)
+
     def test_balanced_bits_are_output_bits_minus_set_zero(self):
         with tempfile.TemporaryDirectory() as td:
             result_path = Path(td) / "result.txt"

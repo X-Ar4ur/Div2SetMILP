@@ -1,11 +1,12 @@
-# Table 3 — Same-environment efficiency comparison matrix.
+# Table 3 - BONC-style per-round metric table.
 #
-# Each entry is run `repeat` times; bench.py records median + (min, max).
-# This matrix currently reports the default 8-thread numbers.
+# This config intentionally benchmarks one cipher across consecutive rounds.
+# The rendered table reports R, T_m, M_m, N_v, N_c, T_s, M_s, and Iter.,
+# so the CSV source should be a single-cipher round sweep rather than a
+# multi-cipher one-point efficiency matrix.
 #
-# Reduction method is pinned to 1 (greedy_sun) here so per-cipher
-# numbers are directly comparable; reduction-method ablation lives in
-# configs/reduction.yaml.
+# To render a different cipher in Table 3, change the single run below and
+# keep round_start/round_end as the round interval to be reported.
 
 defaults:
   reduction: 1
@@ -15,31 +16,7 @@ defaults:
   gurobi_seed: 0
 
 runs:
-  # SIMON / Simeck — bit-level Feistel, no S-box
-  - { cipher: SIMON32,  rounds: 13, activebits: 31 }
-  - { cipher: SIMON48,  rounds: 15, activebits: 47 }
-  - { cipher: SIMON,  rounds: 17, activebits: 63 }
-  - { cipher: SIMON96,  rounds: 21, activebits: 95 }
-  - { cipher: SIMON128, rounds: 25, activebits: 127 }
-  - { cipher: Simeck32, rounds: 14, activebits: 31 }
-  - { cipher: Simeck48, rounds: 17, activebits: 47 }
-  - { cipher: Simeck, rounds: 20, activebits: 63 }
-
-  # SPN ciphers
-  - { cipher: PRESENT,   rounds: 9,  activebits: 60 }
-  - { cipher: Rectangle, rounds: 9,  activebits: 60 }
-  - { cipher: LBlock,    rounds: 16, activebits: 63 }
-  - { cipher: TWINE,     rounds: 16, activebits: 63 }
-  #- { cipher: GIFT,      rounds: 9,  activebits: 60 }
-
-  # Scalability slice — same cipher across rounds, for the time-vs-rounds plot.
-  # Temporarily disabled so Table 3 only runs the main efficiency comparison.
-  # - { cipher: PRESENT, rounds: 6, activebits: 60, slice: scaling }
-  # - { cipher: PRESENT, rounds: 7, activebits: 60, slice: scaling }
-  # - { cipher: PRESENT, rounds: 8, activebits: 60, slice: scaling }
-  # - { cipher: PRESENT, rounds: 9, activebits: 60, slice: scaling }
-
-  # - { cipher: SIMON32, rounds: 11, activebits: R16, slice: scaling }
-  # - { cipher: SIMON32, rounds: 12, activebits: R16, slice: scaling }
-  # - { cipher: SIMON32, rounds: 13, activebits: R16, slice: scaling }
-  # - { cipher: SIMON32, rounds: 14, activebits: R16, slice: scaling }
+  - cipher: PRESENT
+    activebits: 60
+    round_start: 1
+    round_end: 10

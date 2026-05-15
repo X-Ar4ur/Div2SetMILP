@@ -53,11 +53,11 @@ python make_tables.py --table correctness results/correctness_*.csv > tables/tab
 python bench.py --config configs/round_sweep.yaml
 python make_tables.py --table rounds results/round_sweep_*.csv > tables/table2.tex
 
-# 5. 完整性能扫描（5 次重复 × 多个线程数）
-python bench.py --config configs/perf.yaml
-# 表 3 是 BONC 风格的单密码逐轮指标表；CSV 中有多个密码时需要指定 --cipher。
-python make_tables.py --table perf --cipher PRESENT results/perf_*.csv > tables/table3.tex
-python make_tables.py --plot scaling results/perf_*.csv
+# 5. 表 3：BONC 风格的单密码逐轮性能扫描
+python bench.py --config configs/perf.yaml --out results/perf_present_rounds.csv
+# perf.yaml 默认生成 PRESENT 的 R=1..10 逐轮 CSV；如改成多个密码，渲染时需要指定 --cipher。
+python make_tables.py --table perf --cipher PRESENT results/perf_present_rounds.csv > tables/table3.tex
+python make_tables.py --plot scaling results/perf_present_rounds.csv
 
 # 6. 约简方法消融实验
 python bench.py --config configs/reduction.yaml
