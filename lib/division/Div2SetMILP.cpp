@@ -5,6 +5,19 @@
 extern std::map<std::string, std::vector<int>> allBox;
 extern std::string cipherName;
 
+static std::string safeActivebitsId(const std::string& spec) {
+    std::string out;
+    out.reserve(spec.size());
+    for (char c : spec) {
+        bool ok = (c >= '0' && c <= '9') ||
+                  (c >= 'A' && c <= 'Z') ||
+                  (c >= 'a' && c <= 'z') ||
+                  c == '_' || c == '-' || c == '.';
+        out.push_back(ok ? c : '_');
+    }
+    return out;
+}
+
 
 Div2SetMILP::Div2SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
                          const std::string& activebitsSpec, const std::string& cipherName)
@@ -266,10 +279,11 @@ void Div2SetMILP::MGR() {
     std::string milpDir = this->pathPrefix + "milp/";
     (void)system(("mkdir -p " + milpDir).c_str());
 
+    std::string activebitsFileId = safeActivebitsId(this->activebitsSpec);
     this->modelPath = milpDir + this->cipherName + "_" + std::to_string(this->rounds)
-                      + "_" + this->activebitsSpec + ".lp";
+                      + "_" + activebitsFileId + ".lp";
     this->resultsPath = milpDir + "result_" + std::to_string(this->rounds)
-                        + "_" + this->activebitsSpec + ".txt";
+                        + "_" + activebitsFileId + ".txt";
 
     // Clear model file
     std::ofstream clearFile(this->modelPath, std::ios::trunc);

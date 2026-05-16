@@ -22,9 +22,44 @@ def load_module(name: str, path: Path):
 sys.modules.setdefault("yaml", types.SimpleNamespace(safe_load=lambda _f: {}))
 bench = load_module("bench", HERE / "bench.py")
 make_tables = load_module("make_tables", HERE / "make_tables.py")
+active_search = load_module("active_search", HERE / "active_search.py")
 
 
 class ExperimentTableTests(unittest.TestCase):
+    def test_active_mask_uses_big_endian_x_variable_order(self):
+        mask = active_search.mask_from_active_vars(8, [8, 7, 4, 1])
+
+        self.assertEqual(mask.hex_spec, "hex:c9")
+        self.assertEqual(mask.weight, 4)
+        self.assertEqual(mask.inactive_positions, [6, 5, 3, 2])
+
+    def test_default_mask_matches_present_integer_activebits(self):
+        mask = active_search.default_mask("PRESENT", 64, 60)
+
+        self.assertEqual(mask.hex_spec, "hex:fffffffffffffff0")
+        self.assertEqual(mask.weight, 60)
+        self.assertEqual(mask.inactive_positions, [4, 3, 2, 1])
+
+    def test_search_config_expands_published_and_next_round(self):
+        cfg = {
+            "defaults": {"reduction": 1, "threads": 8, "repeat": 1},
+            "runs": [
+                {
+                    "cipher": "PRESENT",
+                    "block_size": 64,
+                    "published_round": 9,
+                    "weight": 60,
+                    "strategies": ["published_variants"],
+                }
+            ],
+        }
+
+        runs = active_search.expand_search_runs(cfg)
+
+        self.assertEqual(sorted({r["rounds"] for r in runs}), [9, 10])
+        self.assertTrue(all(r["activebits"].startswith("hex:") for r in runs))
+        self.assertTrue(all(r["weight"] == 60 for r in runs))
+
     def test_perf_config_is_single_cipher_round_sweep(self):
         cfg_text = (HERE / "configs" / "perf.yaml").read_text()
 
@@ -71,6 +106,12 @@ class ExperimentTableTests(unittest.TestCase):
         runs = bench.expand_runs(cfg)
 
         self.assertEqual([r["rounds"] for r in runs], [1, 2, 3])
+
+    def test_hex_activebits_uses_safe_result_filename(self):
+        self.assertEqual(bench.safe_activebits_id("hex:c9"), "hex_c9")
+        path = bench.result_path_for("PRESENT", 9, "hex:c9")
+
+        self.assertEqual(path.name, "result_9_hex_c9.txt")
 
     def test_round_sweep_table_has_found_and_time_rows(self):
         rows = [

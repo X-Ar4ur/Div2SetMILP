@@ -97,7 +97,7 @@ def parse(text: str) -> dict[str, Any]:
 
 def read_balanced_bits(cipher: str, rounds: str, activebits: str) -> list[str]:
     p = (REPO_ROOT / "data" / "division" / cipher / "milp"
-         / f"result_{rounds}_{activebits}.txt")
+         / f"result_{rounds}_{safe_activebits_id(activebits)}.txt")
     if not p.exists():
         return []
     output_bits: list[str] = []
@@ -128,6 +128,10 @@ def read_balanced_bits(cipher: str, rounds: str, activebits: str) -> list[str]:
     if output_bits:
         return sorted_vars(list(set(output_bits) - set(set_zero)))
     return sorted_vars(listed_balanced)
+
+
+def safe_activebits_id(activebits: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(activebits))
 
 
 def fmt_human(s: dict[str, Any]) -> str:

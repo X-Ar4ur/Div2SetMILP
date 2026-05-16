@@ -241,8 +241,13 @@ def parse_result_file(result_path: Path) -> dict[str, list[str]]:
 def result_path_for(cipher: str, rounds: int, activebits: str) -> Path:
     return (
         REPO_ROOT / "data" / "division" / cipher / "milp"
-        / f"result_{rounds}_{activebits}.txt"
+        / f"result_{rounds}_{safe_activebits_id(activebits)}.txt"
     )
+
+
+def safe_activebits_id(activebits: str) -> str:
+    """Return the file-name token used by Div2SetMILP for activebitsSpec."""
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(activebits))
 
 
 # --------------------------------------------------------------------------

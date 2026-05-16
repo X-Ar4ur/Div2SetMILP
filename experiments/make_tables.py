@@ -170,8 +170,12 @@ def parse_result_file(path: Path) -> dict[str, list[str]]:
 def result_path_for(cipher: str, rounds: str, activebits: str) -> Path:
     return (
         HERE.parent / "data" / "division" / cipher / "milp"
-        / f"result_{rounds}_{activebits}.txt"
+        / f"result_{rounds}_{safe_activebits_id(activebits)}.txt"
     )
+
+
+def safe_activebits_id(activebits: str) -> str:
+    return re.sub(r"[^A-Za-z0-9_.-]", "_", str(activebits))
 
 
 def csv_list(value: str) -> list[str]:

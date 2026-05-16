@@ -1,0 +1,27 @@
+# Input-structure search for EasyBC 2-subset division-property experiments.
+#
+# This first-stage search does not change the MILP propagation rules. It only
+# changes the initial division-property vector through explicit hex:<mask>
+# activebits specifications.
+
+defaults:
+  reduction: 1
+  repeat: 1
+  timer_sec: 86400
+  threads: 8
+  seed: 2080
+  random_samples: 1000
+  local_search_limit: 256
+  strategies:
+    - published_variants
+    - structured_inactive
+    - small_inactive_exhaustive
+    - random_sample
+    - local_search
+
+runs:
+  - { cipher: PRESENT,   block_size: 64, published_round: 9,  weight: 60 }
+  - { cipher: Rectangle, block_size: 64, published_round: 9,  weight: 60 }
+  - { cipher: GIFT,      block_size: 64, published_round: 9,  weight: 60 }
+  - { cipher: LBlock,    block_size: 64, published_round: 16, weight: 63 }
+  - { cipher: TWINE,     block_size: 64, published_round: 16, weight: 63 }
