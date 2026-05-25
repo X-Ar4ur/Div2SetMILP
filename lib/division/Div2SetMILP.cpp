@@ -3,6 +3,8 @@
 #include <chrono>
 
 extern std::map<std::string, std::vector<int>> allBox;
+extern std::map<std::string, std::vector<int>> pboxM;
+extern std::map<std::string, std::vector<int>> Ffm;
 extern std::string cipherName;
 
 
@@ -530,14 +532,52 @@ void Div2SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                 }
             }
         } else if (ele->getOp() == ASTNode::SYMBOLINDEX) {
-            // Matrix/linear layer - for division property, handled as XOR chains if needed
-            // Skip pboxm operations (not needed for SPN ciphers using pbox)
+            // SYMBOLINDEX has two relevant sub-forms in TAC:
+            //   (a) array element index    (LHS NodeType == ARRAY)  — handled
+            //       by the non-function-call aliasing block below.
+            //   (b) GF(2^m) matrix-vector multiplication, where the lhs op is
+            //       FFTIMES and lhs->lhs is a `pboxm*`-named box. The
+            //       Transformer emits one SYMBOLINDEX+FFTIMES node per output
+            //       byte of the s*s matrix; we aggregate s of them before
+            //       dispatching to FfMulGenModel (mirrors DiffSBMILP's
+            //       dispatch at lib/differential/DiffSBMILP.cpp:999-1030).
             ThreeAddressNodePtr left = ele->getLhs();
             if (left->getOp() == ASTNode::FFTIMES) {
-                std::cout << "WARNING: Matrix-vector multiplication (pboxm) in division property analysis.\n"
-                          << "  Currently not supported. Use ciphers with simple pbox permutation." << std::endl;
-                assert(false);
+                if (left->getLhs()->getNodeName().substr(0, 5) == "pboxm") {
+                    functionCallFlag = true;
+                    std::vector<ThreeAddressNodePtr> ffmOutput;
+                    int pboxSize = (int)pboxM[left->getLhs()->getNodeName()].size();
+                    int outputNum = (int)std::sqrt((double)pboxSize);
+                    while (outputNum > 0) {
+                        ffmOutput.push_back(ele);
+                        i++;
+                        if (i == (int)procedureH->getBlock().size()) {
+                            i--;
+                            break;
+                        }
+                        ele = procedureH->getBlock().at(i);
+                        left = ele->getLhs();
+                        if (left != nullptr && left->getOp() == ASTNode::FFTIMES &&
+                            left->getLhs()->getNodeName().substr(0, 5) == "pboxm") {
+                            outputNum--;
+                            continue;
+                        } else {
+                            i--;
+                            left = procedureH->getBlock().at(i)->getLhs();
+                            break;
+                        }
+                    }
+                    if (outputNum == 0) i--;
+                    left = procedureH->getBlock().at(i)->getLhs();
+                    FfMulGenModel(left->getLhs(), left->getRhs(), ffmOutput);
+                } else {
+                    std::cout << "ERROR: FFTIMES op encountered in Div2SetMILP without "
+                              << "pboxm-prefixed lhs (got '" << left->getLhs()->getNodeName() << "')." << std::endl;
+                    assert(false);
+                }
             }
+            // SYMBOLINDEX with a non-FFTIMES sub-op (e.g. array indexing) is
+            // handled by the aliasing block below — leave functionCallFlag=false.
         } else if (ele->getOp() == ASTNode::TOUINT) {
             if (ele->getLhs()->getOp() == ASTNode::BOXINDEX) {
                 ThreeAddressNodePtr left = ele->getLhs();
@@ -1006,6 +1046,155 @@ void Div2SetMILP::PboxGenModel(const ThreeAddressNodePtr &pbox, const ThreeAddre
         outputIdx[i] = inputIdx[pboxValue[i]];
     for (int i = 0; i < (int)outputIdx.size(); ++i)
         this->tanNameMxIndex[output->getNodeName() + "_$B$_" + std::to_string(i)] = outputIdx[i];
+}
+
+
+// Phase A of the complex-linear-layer division integration: disjointed
+// representation only. See doc/complex_linear_layer_division_plan.md §4 for
+// the full plan (Phase B will add on-the-fly invalid-trail discarding via
+// Gurobi callbacks; this function does NOT touch the solver).
+void Div2SetMILP::FfMulGenModel(const ThreeAddressNodePtr &pboxm,
+                                 const ThreeAddressNodePtr &input,
+                                 const std::vector<ThreeAddressNodePtr> &output) {
+    // ---- 1. Flatten input vector (BOXINDEX chain) into s byte-level refs ----
+    std::vector<ThreeAddressNodePtr> inputTAN;
+    if (input->getOp() == ASTNode::BOXINDEX) {
+        ThreeAddressNodePtr left = input;
+        while (left->getOp() == ASTNode::BOXINDEX) {
+            inputTAN.push_back(left->getLhs());
+            left = left->getRhs();
+        }
+        inputTAN.push_back(left);
+    } else {
+        std::cout << "ERROR: FfMulGenModel expects input as a BOXINDEX chain "
+                  << "(got op=" << input->getOp() << ")." << std::endl;
+        assert(false);
+    }
+
+    const std::string& pboxmName = pboxm->getNodeName();
+    int s = (int)inputTAN.size();
+    if ((int)output.size() != s) {
+        std::cout << "ERROR: FfMulGenModel size mismatch for " << pboxmName
+                  << ": input bytes=" << s << " but output bytes=" << output.size() << std::endl;
+        assert(false);
+    }
+
+    // ---- 2. Resolve m from the input byte type and cross-check with ffm ----
+    int m_in = transNodeTypeSize(inputTAN[0]->getNodeType());
+    if (m_in <= 1) {
+        std::cout << "ERROR: FfMulGenModel cannot determine GF(2^m) bit width for " << pboxmName
+                  << " (input byte NodeType=" << inputTAN[0]->getNodeType() << ")." << std::endl;
+        assert(false);
+    }
+
+    const std::vector<int>& pboxmFlat = pboxM[pboxmName];
+    const std::vector<int>& ffmFlat = Ffm[pboxmName];
+    if (pboxmFlat.empty() || ffmFlat.empty()) {
+        std::cout << "ERROR: FfMulGenModel missing pboxM/Ffm entry for " << pboxmName
+                  << " (pboxM.size=" << pboxmFlat.size() << ", Ffm.size=" << ffmFlat.size() << ")." << std::endl;
+        assert(false);
+    }
+
+    int dimFromFfm = (int)std::round(std::sqrt((double)ffmFlat.size()));
+    if (dimFromFfm * dimFromFfm != (int)ffmFlat.size()) {
+        std::cout << "ERROR: ffm table for " << pboxmName << " is not square (size="
+                  << ffmFlat.size() << ")." << std::endl;
+        assert(false);
+    }
+    int m_ffm = -1;
+    for (int k = 1; k <= 16; ++k) {
+        if ((1 << k) == dimFromFfm) { m_ffm = k; break; }
+    }
+    if (m_ffm == -1) {
+        std::cout << "ERROR: ffm table dimension " << dimFromFfm
+                  << " is not 2^k for " << pboxmName << std::endl;
+        assert(false);
+    }
+
+    if (m_in != m_ffm) {
+        std::cout << "ERROR: ffm/pboxm field-size mismatch for '" << pboxmName << "':\n"
+                  << "  input byte type implies m_in=" << m_in << "\n"
+                  << "  ffm table is " << dimFromFfm << "x" << dimFromFfm
+                  << "  (=> m_ffm=" << m_ffm << ").\n"
+                  << "  Phase A of complex-linear-layer division integration requires the ffm\n"
+                  << "  table to describe the same GF(2^m) used by the pboxm element type.\n"
+                  << "  Fix the .cl file (e.g. supply a full GF(2^" << m_in << ") ffm table) or\n"
+                  << "  pick a cipher without pboxm. See doc/complex_linear_layer_division_plan.md."
+                  << std::endl;
+        assert(false);
+    }
+    int m = m_in;
+
+    // ---- 3. Build the GF(2) primitive matrix from pboxm + ffm ----
+    auto _bench_t0 = std::chrono::steady_clock::now();
+    int modulus = PrimitiveMatrix::inferModulus(ffmFlat, m);
+    PrimitiveMatrix::validateFfm(ffmFlat, m, modulus);
+    PrimitiveMatrix::BinaryMatrix P = PrimitiveMatrix::inflate(pboxmFlat, s, m, modulus);
+    int n = s * m;
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_inflate_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=linlayer_inflate cipher=" << this->cipherName
+              << " pboxm=" << pboxmName
+              << " s=" << s << " m=" << m << " n=" << n
+              << " modulus=0x" << std::hex << modulus << std::dec
+              << " elapsed_ms=" << _bench_inflate_ms << std::endl;
+
+    // ---- 4. Flatten input bit indices (per-byte LSB-first) ----
+    std::vector<int> uIdxFlat;
+    uIdxFlat.reserve(n);
+    for (int j = 0; j < s; ++j) {
+        std::vector<int> bytes_j = extIdxFromTOUINTorBOXINDEX(inputTAN[j]);
+        if ((int)bytes_j.size() != m) {
+            std::cout << "ERROR: input byte " << j << " for " << pboxmName
+                      << " expanded to " << bytes_j.size() << " bits, expected " << m << std::endl;
+            assert(false);
+        }
+        for (int k = 0; k < m; ++k) uIdxFlat.push_back(bytes_j[k]);
+    }
+
+    // ---- 5. Allocate output bit indices, register per-bit aliases ----
+    std::vector<int> vIdxFlat(n, 0);
+    for (int i = 0; i < s; ++i) {
+        for (int k = 0; k < m; ++k) {
+            int idx = this->xCounter++;
+            vIdxFlat[i * m + k] = idx;
+            this->tanNameMxIndex[output[i]->getNodeName() + "_$B$_" + std::to_string(k)] = idx;
+        }
+    }
+
+    // ---- 6. Emit disjointed-representation constraints --------------------
+    // For each output bit r:  v_r - Σ_{c: P[r][c]=1} consumeCopy(u_c) = 0
+    // consumeCopy emits a Phase-5 2-way COPY per call; repeated splits on the
+    // same column c telescope into an exact k-way COPY once the dead tail is
+    // pinned to 0 by programGenModel's tail-pin pass.
+    int _bench_xor_rows = 0, _bench_copy_calls = 0;
+    for (int r = 0; r < n; ++r) {
+        std::vector<int> ainputs;
+        for (int c = 0; c < n; ++c) {
+            if (P[r][c]) {
+                int a = consumeCopy(uIdxFlat[c]);
+                ainputs.push_back(a);
+                _bench_copy_calls++;
+            }
+        }
+        if (ainputs.empty()) {
+            // All-zero row: this bit of v is identically 0.
+            std::ofstream scons(this->modelPath, std::ios::app);
+            scons << "x" << vIdxFlat[r] << " = 0\n";
+            scons.close();
+            continue;
+        }
+        DivMILPcons::divXorMultiC(this->modelPath, ainputs, vIdxFlat[r]);
+        _bench_xor_rows++;
+    }
+
+    auto _bench_t2 = std::chrono::steady_clock::now();
+    long long _bench_emit_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t2 - _bench_t1).count();
+    std::cerr << "[BENCH] phase=linlayer_emit cipher=" << this->cipherName
+              << " pboxm=" << pboxmName
+              << " xor_rows=" << _bench_xor_rows
+              << " copy_calls=" << _bench_copy_calls
+              << " elapsed_ms=" << _bench_emit_ms << std::endl;
 }
 
 

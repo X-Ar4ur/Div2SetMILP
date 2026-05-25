@@ -34,6 +34,13 @@ namespace DivMILPcons {
     void divSboxC(std::string path, std::vector<int> inputIdx, std::vector<int> outputIdx,
                   std::vector<std::vector<int>> ineqs);
 
+    // Division property N-input XOR constraint (extension of divXorC for the
+    // disjointed-representation linear-layer model):
+    //   x_out - x_in1 - x_in2 - ... - x_inN = 0
+    // inputIdx must be non-empty; N==1 is allowed and degenerates to an
+    // aliasing equality x_out - x_in1 = 0.
+    void divXorMultiC(std::string path, const std::vector<int>& inputIdx, int outputIdx);
+
 }
 
 #endif //EASYBC_DIVMILPCONS_H

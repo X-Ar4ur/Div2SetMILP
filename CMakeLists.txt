@@ -67,6 +67,7 @@ ADD_EXECUTABLE(EasyBC
         include/sbox/SboxDivTrails.h
         include/sbox/DivTrailsModel.h
         include/util/utilities.h
+        include/util/PrimitiveMatrix.h
         lib/preprocessing/ASTNode.cpp
         lib/preprocessing/ValueCommon.cpp
         lib/preprocessing/ProcedureH.cpp
@@ -80,6 +81,7 @@ ADD_EXECUTABLE(EasyBC
         lib/sbox/SboxDivTrails.cpp
         lib/sbox/DivTrailsModel.cpp
         lib/util/utilities.cpp
+        lib/util/PrimitiveMatrix.cpp
         lib/division/DivMILPcons.cpp
         lib/division/Div2SetMILP.cpp
         lib/differential/DiffSBMILP.cpp

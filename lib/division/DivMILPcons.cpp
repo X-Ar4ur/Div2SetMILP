@@ -69,3 +69,21 @@ void DivMILPcons::divSboxC(std::string path, std::vector<int> inputIdx, std::vec
     }
     scons.close();
 }
+
+void DivMILPcons::divXorMultiC(std::string path, const std::vector<int>& inputIdx, int outputIdx) {
+    if (inputIdx.empty()) {
+        std::cout << "ERROR: divXorMultiC called with empty inputIdx (outputIdx=" << outputIdx << ")" << std::endl;
+        return;
+    }
+    std::ofstream scons(path, std::ios::app);
+    if (!scons) {
+        std::cout << "Wrong file path in divXorMultiC!" << std::endl;
+    } else {
+        scons << "x" << outputIdx;
+        for (auto i : inputIdx) {
+            scons << " - x" << i;
+        }
+        scons << " = 0\n";
+    }
+    scons.close();
+}

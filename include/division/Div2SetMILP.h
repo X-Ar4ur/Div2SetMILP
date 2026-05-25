@@ -16,6 +16,7 @@
 #include "Transformer.h"
 #include "Interpreter.h"
 #include "DivMILPcons.h"
+#include "util/PrimitiveMatrix.h"
 
 #include "gurobi_c++.h"
 
@@ -107,6 +108,33 @@ public:
                       const ThreeAddressNodePtr& output);
     void PboxGenModel(const ThreeAddressNodePtr& pbox, const ThreeAddressNodePtr& input,
                       const ThreeAddressNodePtr& output);
+
+    // Phase A of the complex-linear-layer integration:
+    //   Generates the disjointed-representation MILP constraints (Sun et al.
+    //   2020 / ElSheikh-Youssef §3.1) for a GF(2^m) matrix-vector multiplication
+    //   `output = pboxm * input`. The transformer pre-expands the multiplication
+    //   into s consecutive SYMBOLINDEX+FFTIMES TAC nodes; the caller is expected
+    //   to aggregate those s nodes into `output` (one per output byte). `input`
+    //   is the BOXINDEX chain holding the input vector.
+    //
+    // This does NOT add the on-the-fly invalid-trail discarding from
+    // ElSheikh-Youssef §4.2 — that requires Gurobi callback support and is
+    // tracked as Phase B in doc/complex_linear_layer_division_plan.md.
+    //
+    // Pre-conditions enforced inside (with descriptive error + assert):
+    //   - input is a BOXINDEX chain.
+    //   - inputTAN.size() == output.size().
+    //   - The pboxm element type (m_in) matches the ffm table dimension (m_ffm),
+    //     i.e. (2^m_in)^2 == ffmFlat.size().
+    //   - pboxM[pboxmName] / Ffm[pboxmName] populated by the Interpreter.
+    //
+    // Constraint shape per row r of the inflated (s*m) x (s*m) primitive matrix P:
+    //     v_r - Σ_{c: P[r][c]=1} consumeCopy(u_c) = 0           // N-input XOR
+    // plus the implicit 2-way COPY chains emitted by consumeCopy, which
+    // telescope into exact k-way COPYs via the existing Phase-5 tail-pin pass.
+    void FfMulGenModel(const ThreeAddressNodePtr& pboxm,
+                       const ThreeAddressNodePtr& input,
+                       const std::vector<ThreeAddressNodePtr>& output);
 
     void iterativeSolver();
 
