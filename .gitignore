@@ -39,6 +39,12 @@ paper/
 paper-zh-draft/
 Latex/
 
+# Local-only design notes / progress logs (not pushed)
+# Note: doc/division_greedy_sun_reuse_plan.md and doc/present_preprocessing_pipeline.md
+# are already tracked (inherited from main) and stay tracked. This ignore rule
+# only affects future untracked additions under doc/.
+doc/
+
 # Archives
 *.zip
 *.tar
