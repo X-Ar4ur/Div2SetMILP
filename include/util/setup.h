@@ -176,7 +176,8 @@ namespace setup{
              {"LBlock",    "LBlock"},
              {"TWINE",     "TWINE"},
              {"GIFT",      "GIFT_64"},
-             {"Simeck",    "Simeck"}};
+             {"Simeck",    "Simeck"},
+             {"AES_GF4_toy", "AES_GF4_toy"}};
 
     static std::unordered_map<std::string, std::string> cryptPrimitiveSetMap
             {{"PRESENT",   "singleKey/BlockCipher"},
@@ -191,5 +192,6 @@ namespace setup{
              {"LBlock",    "singleKey/BlockCipher"},
              {"TWINE",     "singleKey/BlockCipher"},
              {"GIFT",      "singleKey/BlockCipher"},
-             {"Simeck",    "singleKey/BlockCipher"}};
+             {"Simeck",    "singleKey/BlockCipher"},
+             {"AES_GF4_toy", "singleKey/BlockCipher"}};
 }
