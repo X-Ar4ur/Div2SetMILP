@@ -616,10 +616,34 @@ void Div2SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
         // Variable aliasing for non-function-call operations
         if (!functionCallFlag) {
             if (ele->getLhs()->getNodeType() == NodeType::ARRAY and ele->getOp() == ASTNode::SYMBOLINDEX) {
-                std::string finderName = ele->getLhs()->getNodeName() + "_$B$_" + ele->getRhs()->getNodeName();
-                for (const auto &pair: this->tanNameMxIndex) {
-                    if (finderName == pair.first)
-                        this->tanNameMxIndex[ele->getNodeName()] = pair.second;
+                // `ele` is `dst = arr[index]`. Two shapes to handle:
+                //   (a) Bit-level: arr is uint1[N]. The 0-th bit of arr[index]
+                //       is arr_$B$_index — register `dst → arr_$B$_index`.
+                //   (b) Multi-bit: arr is uintM[N] (M>1, e.g. uint4 nibble array
+                //       coming out of an S-box / pbox / linear layer).
+                //       arr_$B$_(index*M + k) is bit k of arr[index]; register
+                //       per-bit aliases `dst_$B$_k → arr_$B$_(index*M + k)` for
+                //       k=0..M-1 so downstream consumers (Pbox / FfMulGenModel /
+                //       SboxGenModel) can resolve them via the existing
+                //       `<name>_$B$_<k>` lookup convention.
+                int elemBits = transNodeTypeSize(ele->getNodeType());
+                if (elemBits > 1 &&
+                    this->tanNameMxIndex.count(ele->getLhs()->getNodeName() + "_$B$_0") != 0) {
+                    int idx = stoi(ele->getRhs()->getNodeName());
+                    for (int k = 0; k < elemBits; ++k) {
+                        std::string src = ele->getLhs()->getNodeName() + "_$B$_" +
+                                          std::to_string(idx * elemBits + k);
+                        auto it = this->tanNameMxIndex.find(src);
+                        if (it != this->tanNameMxIndex.end()) {
+                            this->tanNameMxIndex[ele->getNodeName() + "_$B$_" + std::to_string(k)] = it->second;
+                        }
+                    }
+                } else {
+                    std::string finderName = ele->getLhs()->getNodeName() + "_$B$_" + ele->getRhs()->getNodeName();
+                    for (const auto &pair: this->tanNameMxIndex) {
+                        if (finderName == pair.first)
+                            this->tanNameMxIndex[ele->getNodeName()] = pair.second;
+                    }
                 }
             } else {
                 for (const auto &pair: this->tanNameMxIndex) {
@@ -1036,7 +1060,80 @@ void Div2SetMILP::PboxGenModel(const ThreeAddressNodePtr &pbox, const ThreeAddre
     // pbox counts as one READ of its upstream bit. Phase 5: peel off a
     // fresh copy per input bit so SIMON-style repeated pbox uses of the
     // same l_input bit get independent MILP variables.
+    //
+    // Two shapes are supported:
+    //   (a) Bit-level pbox (PRESENT/GIFT/SIMON/LBlock/...): input is TOUINT
+    //       or BOXINDEX of uint1 elements; pboxValue indexes individual bits.
+    //   (b) Multi-bit element pbox (AES-style ShiftRows over nibbles/bytes):
+    //       input is BOXINDEX of multi-bit elements, each previously produced
+    //       by an S-box / nibble-level operation and stored as
+    //       `<name>_$B$_k` bit aliases (k = 0..m-1, LSB-first). pboxValue
+    //       indexes whole elements; we expand to a bit-level permutation
+    //       output_bit[i*m+k] = input_bit[pboxValue[i]*m+k].
+    //
+    // Detection of case (b): we walk the BOXINDEX chain and check whether
+    // each element's `_$B$_0` alias is registered. extIdxFromTOUINTorBOXINDEX
+    // is NOT used for multi-bit elements because it has no branch for that
+    // shape (it would either assert or, for cipher-specific ele layouts,
+    // get stuck in an infinite loop).
     std::vector<int> pboxValue = this->Box[pbox->getNodeName()];
+
+    // Try to collect element refs from a BOXINDEX chain.
+    std::vector<ThreeAddressNodePtr> elems;
+    if (input->getOp() == ASTNode::BOXINDEX) {
+        ThreeAddressNodePtr cur = input;
+        while (cur && cur->getOp() == ASTNode::BOXINDEX) {
+            elems.push_back(cur->getLhs());
+            cur = cur->getRhs();
+        }
+        if (cur) elems.push_back(cur);
+    }
+
+    // Multi-bit detection: first element has a `_$B$_0` alias registered
+    // AND the number of elements equals pboxValue.size() (the permutation
+    // is over elements, not over the totality of bits).
+    bool isMultibit = false;
+    int m = 1;
+    if (!elems.empty() && (int)elems.size() == (int)pboxValue.size()) {
+        std::string baseName = elems[0]->getNodeName();
+        if (this->tanNameMxIndex.count(baseName + "_$B$_0") != 0) {
+            isMultibit = true;
+            while (this->tanNameMxIndex.count(baseName + "_$B$_" + std::to_string(m)) != 0) m++;
+        }
+    }
+
+    if (isMultibit) {
+        int n = (int)elems.size();
+        std::vector<int> inputBits;
+        inputBits.reserve(n * m);
+        for (int e = 0; e < n; ++e) {
+            const std::string& baseName = elems[e]->getNodeName();
+            for (int k = 0; k < m; ++k) {
+                std::string alias = baseName + "_$B$_" + std::to_string(k);
+                auto it = this->tanNameMxIndex.find(alias);
+                if (it == this->tanNameMxIndex.end()) {
+                    std::cerr << "ERROR: PboxGenModel multi-bit alias missing: " << alias << std::endl;
+                    assert(false);
+                }
+                inputBits.push_back(it->second);
+            }
+        }
+
+        for (int& idx : inputBits) idx = consumeCopy(idx);
+
+        for (int i = 0; i < n; ++i) {
+            int srcElem = pboxValue[i];
+            for (int k = 0; k < m; ++k) {
+                this->tanNameMxIndex[output->getNodeName() + "_$B$_" + std::to_string(i * m + k)]
+                    = inputBits[srcElem * m + k];
+            }
+        }
+        return;
+    }
+
+    // Bit-level path (PRESENT/GIFT/SIMON/...): pboxValue indexes individual
+    // bits; extIdxFromTOUINTorBOXINDEX returns a bit vector that pboxValue
+    // permutes directly.
     std::vector<int> inputIdx = extIdxFromTOUINTorBOXINDEX(input);
     for (int &idx : inputIdx) idx = consumeCopy(idx);
     std::vector<int> outputIdx;
@@ -1140,16 +1237,37 @@ void Div2SetMILP::FfMulGenModel(const ThreeAddressNodePtr &pboxm,
               << " elapsed_ms=" << _bench_inflate_ms << std::endl;
 
     // ---- 4. Flatten input bit indices (per-byte LSB-first) ----
+    // Each inputTAN[j] is one byte/nibble reference. Two shapes:
+    //   (a) Element has `_$B$_k` aliases registered (e.g. it is the output of
+    //       an S-box / pbox, written by SboxGenModel / PboxGenModel). Pull
+    //       the m bit indices straight out of tanNameMxIndex — this avoids
+    //       extIdxFromTOUINTorBOXINDEX, which has no branch for a bare
+    //       multi-bit element ref and would assert false.
+    //   (b) Bit-level packed shape (TOUINT(uint1,uint1,..) or BOXINDEX chain
+    //       of uint1): fall back to extIdxFromTOUINTorBOXINDEX as before.
     std::vector<int> uIdxFlat;
     uIdxFlat.reserve(n);
     for (int j = 0; j < s; ++j) {
-        std::vector<int> bytes_j = extIdxFromTOUINTorBOXINDEX(inputTAN[j]);
-        if ((int)bytes_j.size() != m) {
-            std::cout << "ERROR: input byte " << j << " for " << pboxmName
-                      << " expanded to " << bytes_j.size() << " bits, expected " << m << std::endl;
-            assert(false);
+        const std::string& baseName = inputTAN[j]->getNodeName();
+        if (this->tanNameMxIndex.count(baseName + "_$B$_0") != 0) {
+            for (int k = 0; k < m; ++k) {
+                std::string alias = baseName + "_$B$_" + std::to_string(k);
+                auto it = this->tanNameMxIndex.find(alias);
+                if (it == this->tanNameMxIndex.end()) {
+                    std::cout << "ERROR: FfMulGenModel multi-bit alias missing: " << alias << std::endl;
+                    assert(false);
+                }
+                uIdxFlat.push_back(it->second);
+            }
+        } else {
+            std::vector<int> bytes_j = extIdxFromTOUINTorBOXINDEX(inputTAN[j]);
+            if ((int)bytes_j.size() != m) {
+                std::cout << "ERROR: input byte " << j << " for " << pboxmName
+                          << " expanded to " << bytes_j.size() << " bits, expected " << m << std::endl;
+                assert(false);
+            }
+            for (int k = 0; k < m; ++k) uIdxFlat.push_back(bytes_j[k]);
         }
-        for (int k = 0; k < m; ++k) uIdxFlat.push_back(bytes_j[k]);
     }
 
     // ---- 5. Allocate output bit indices, register per-bit aliases ----
