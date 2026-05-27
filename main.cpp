@@ -1,5 +1,6 @@
 #include <iostream>
 #include <chrono>
+#include <fstream>
 #include <ASTNode.h>
 #include "Value.h"
 #include "Interpreter.h"
@@ -380,13 +381,40 @@ void DivTrailsMGR(std::vector<std::string> params) {
             std::string trailsFile = outputDir + sboxName + "_DivisionTrails.txt";
             sboxDivTrails.printDivisionTrails(trailsFile);
 
-            DivTrailsModel model(divCipherName, sboxName,
-                                 sboxDivTrails.getDivisionTrails(),
-                                 sboxDivTrails.getSboxBitSize());
-            model.generateInequalities();
-            model.saveInequalities(outputDir);
-            model.reduceInequalities(reductionMethod);
-            model.saveReducedInequalities(outputDir);
+            // Precomputed-inequality cache (Step 0): if a committed reduced-
+            // inequality file exists for this (cipher, sbox), reuse it and skip
+            // the SageMath convex-hull step (generate + reduce) entirely.
+            // This is required for 8-bit S-boxes (e.g. AES), whose 16-dim
+            // convex hull is intractable for Polyhedron().inequality_generator().
+            // The cached file must already be in EasyBC's LSB-first [in||out]+b
+            // format (one inequality per line, sboxInputSize+sboxOutputSize+1
+            // ints). See doc/complex_linear_layer_division_plan.md (Step 0).
+            std::string cachePath = "../benchmarks/precomputed_sbox_ineqs/" +
+                                    divCipherName + "__" + sboxName +
+                                    "_Reduce_Inequalities.txt";
+            std::string activeIneqPath = outputDir + sboxName + "_Reduce_Inequalities.txt";
+            std::ifstream cacheIn(cachePath, std::ios::binary);
+            bool cacheHit = cacheIn.good() &&
+                            cacheIn.peek() != std::ifstream::traits_type::eof();
+            if (cacheHit) {
+                std::ofstream activeOut(activeIneqPath, std::ios::binary | std::ios::trunc);
+                activeOut << cacheIn.rdbuf();
+                activeOut.close();
+                std::cout << "Using precomputed S-box inequalities (skipping SageMath "
+                             "convex hull): " << cachePath << std::endl;
+                std::cerr << "[BENCH] phase=ineq_cache cipher=" << divCipherName
+                          << " sbox=" << sboxName << std::endl;
+            }
+            cacheIn.close();
+            if (!cacheHit) {
+                DivTrailsModel model(divCipherName, sboxName,
+                                     sboxDivTrails.getDivisionTrails(),
+                                     sboxDivTrails.getSboxBitSize());
+                model.generateInequalities();
+                model.saveInequalities(outputDir);
+                model.reduceInequalities(reductionMethod);
+                model.saveReducedInequalities(outputDir);
+            }
         }
     }
 
