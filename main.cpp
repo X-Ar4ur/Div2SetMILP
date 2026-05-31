@@ -13,6 +13,7 @@
 #include "SboxDivTrails.h"
 #include "DivTrailsModel.h"
 #include "division/Div2SetMILP.h"
+#include "division/Div3SetMILP.h"
 
 
 extern int yyparse();
@@ -31,7 +32,8 @@ std::string cipherName;
 
 void SboxModelingMGR(std::vector<std::string> params);
 void MILPMGR(std::vector<std::string> params);
-void DivTrailsMGR(std::vector<std::string> params);
+// subset: 2 = CBDP (2-subset, `-div`), 3 = BDPT (3-subset, `-div3`)
+void DivTrailsMGR(std::vector<std::string> params, int subset = 2);
 
 int main(int argc, const char* argv[]) {
     std::vector<std::string> params;
@@ -41,7 +43,10 @@ int main(int argc, const char* argv[]) {
     // sbox modeling
     if (argc > 1 and params[0] == "-div") {
         std::vector<std::string> divParams(params.begin() + 1, params.end());
-        DivTrailsMGR(divParams);
+        DivTrailsMGR(divParams, 2);   // 2-subset CBDP
+    } else if (argc > 1 and params[0] == "-div3") {
+        std::vector<std::string> divParams(params.begin() + 1, params.end());
+        DivTrailsMGR(divParams, 3);   // 3-subset BDPT
     } else if (argc == 6) {
         SboxModelingMGR(params);
     } else if (argc >= 8) {
@@ -304,7 +309,7 @@ void MILPMGR(std::vector<std::string> params) {
     }
 }
 
-void DivTrailsMGR(std::vector<std::string> params) {
+void DivTrailsMGR(std::vector<std::string> params, int subset) {
     if (params.empty()) {
         std::cout << "Usage: ./EasyBC -div CIPHER [reductionMethod] [rounds] [activebits]" << std::endl;
         std::cout << "       activebits: integer (e.g. 60) for MSB-first legacy semantics," << std::endl;
@@ -331,7 +336,8 @@ void DivTrailsMGR(std::vector<std::string> params) {
         std::cerr << "[BENCH] config cipher=" << divCipherName
                   << " reduction=" << reductionMethod
                   << " rounds=" << _bench_rounds
-                  << " activebits=" << _bench_activebits << std::endl;
+                  << " activebits=" << _bench_activebits
+                  << " subset=" << subset << std::endl;
     }
 
     // 查找对应的 .cl 文件名
@@ -366,6 +372,8 @@ void DivTrailsMGR(std::vector<std::string> params) {
     std::cout << "\nStep 2: Generate and Reduce Inequalities" << std::endl;
     std::cout << "\nStep 3: MILP Modeling" << std::endl;
     std::cout << "CipherName: " << divCipherName << std::endl;
+    std::cout << "Subset mode: " << subset << "-subset "
+              << (subset == 3 ? "(BDPT)" : "(CBDP)") << std::endl;
 
     bool hasSbox = false;
     for (auto& box : allBox) {
@@ -387,6 +395,27 @@ void DivTrailsMGR(std::vector<std::string> params) {
             model.saveInequalities(outputDir);
             model.reduceInequalities(reductionMethod);
             model.saveReducedInequalities(outputDir);
+
+            // 3-subset BDPT: additionally compute the S-box L-set division
+            // trails (Algorithm 1, L part) and their reduced inequalities.
+            // Passing "<sbox>_L" as the model's sbox name makes both
+            // SboxM::fromPointSet's SageMath paths and the reduced-inequality
+            // file name carry the _L suffix automatically, so the K file
+            // (<sbox>_Reduce_Inequalities.txt, consumed by Div2SetMILP) is
+            // never overwritten. Reuses the same reduction method as K.
+            if (subset == 3) {
+                sboxDivTrails.createLDivisionTrails();
+                std::string lTrailsFile = outputDir + sboxName + "_L_DivisionTrails.txt";
+                sboxDivTrails.printLDivisionTrails(lTrailsFile);
+
+                DivTrailsModel lmodel(divCipherName, sboxName + "_L",
+                                      sboxDivTrails.getLDivisionTrails(),
+                                      sboxDivTrails.getSboxBitSize());
+                lmodel.generateInequalities();
+                lmodel.saveInequalities(outputDir);
+                lmodel.reduceInequalities(reductionMethod);
+                lmodel.saveReducedInequalities(outputDir);
+            }
         }
     }
 
@@ -410,17 +439,32 @@ void DivTrailsMGR(std::vector<std::string> params) {
         transformer.transformProcedures();
         std::vector<ProcedureHPtr> procedureHs = transformer.getProcedureHs();
 
-        Div2SetMILP div2set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
-
-        // Parse optional parameters: timer and threads (从第 5 个参数开始成对解析)
-        for (int i = 4; i < (int)params.size() - 1; i += 2) {
-            if (params[i] == "timer") {
-                div2set.setGurobiTimer(std::stoi(params[i + 1]));
-            } else if (params[i] == "threads") {
-                div2set.setGurobiThreads(std::stoi(params[i + 1]));
+        if (subset == 3) {
+            // 3-subset BDPT (Algorithm 3+4). Phase 0 ships a skeleton; the
+            // model-set construction and counting solver are added in later
+            // phases (see doc/three_subset_bdpt_plan.md).
+            Div3SetMILP div3set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
+            for (int i = 4; i < (int)params.size() - 1; i += 2) {
+                if (params[i] == "timer") {
+                    div3set.setGurobiTimer(std::stoi(params[i + 1]));
+                } else if (params[i] == "threads") {
+                    div3set.setGurobiThreads(std::stoi(params[i + 1]));
+                }
             }
-        }
+            div3set.MGR();
+        } else {
+            Div2SetMILP div2set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
 
-        div2set.MGR();
+            // Parse optional parameters: timer and threads (从第 5 个参数开始成对解析)
+            for (int i = 4; i < (int)params.size() - 1; i += 2) {
+                if (params[i] == "timer") {
+                    div2set.setGurobiTimer(std::stoi(params[i + 1]));
+                } else if (params[i] == "threads") {
+                    div2set.setGurobiThreads(std::stoi(params[i + 1]));
+                }
+            }
+
+            div2set.MGR();
+        }
     }
 }

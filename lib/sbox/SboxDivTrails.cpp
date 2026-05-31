@@ -182,3 +182,92 @@ void SboxDivTrails::printDivisionTrails(const std::string& filename) {
 
     std::cout << "Division Trails written to: " << filename << std::endl;
 }
+
+/**
+ * 计算 S-box 的所有 L-set Division Trails（3-subset BDPT，Algorithm 1 的 L 部分）
+ *
+ * 忠实于参考实现 algorithm1/sbox.py：
+ *   - 复用 createANF()：ANF[u] = π_u(y) 展开成 x 多项式后的单项式集合（u 为输出掩码）。
+ *   - 对 l, u ∈ [1, 2ⁿ)：(l, u) 是合法 L-trail ⟺ π_u(y) 含单项式 π_l(x)（即 l ∈ ANF[u]）
+ *     且其单项式集合不含全 1 单项式（2ⁿ-1 ∉ ANF[u]，等价于 S_∩ = ∩_φ(U\downset(φ)) ≠ ∅）。
+ *   - 末尾显式追加 (0‖0) 零向量与 (全1‖全1) 全 1 trail（通用规则会自排除全 1）。
+ *   - 不做 K-trail 那种 ⪰ up-set 去冗余（L 是精确相等语义）。
+ * 经验证：SIMON "S-box" 共 30 条、PRESENT S-box 共 84 条，与论文 Table 3 一致。
+ */
+void SboxDivTrails::createLDivisionTrails() {
+    auto _bench_t0 = std::chrono::steady_clock::now();
+    std::vector<std::vector<int>> ANF = createANF();  // ANF[0] 保持为空（createANF 从 1 开始）
+    int sboxLen = static_cast<int>(sbox_.size());     // 2ⁿ
+    int n = sboxBitSize_;
+    int allOnes = sboxLen - 1;                         // 2ⁿ-1：全 1 单项式 / 全 1 向量
+
+    lDivTrails_.clear();
+
+    // 显式追加零向量 (0‖0)
+    lDivTrails_.push_back(std::vector<int>(2 * n, 0));
+
+    // 规则生成：l, u 都从 1 遍历（与参考实现一致）
+    for (int l = 1; l < sboxLen; ++l) {
+        for (int u = 1; u < sboxLen; ++u) {
+            // 条件 (a)：l ∈ ANF[u]（π_u(y) 含 π_l(x)）
+            bool containsL = false;
+            for (int mono : ANF[u]) {
+                if (mono == l) { containsL = true; break; }
+            }
+            if (!containsL) continue;
+
+            // 条件 (b)：全 1 单项式 ∉ ANF[u]（S_∩ ≠ ∅）
+            bool hasAllOnes = false;
+            for (int mono : ANF[u]) {
+                if (mono == allOnes) { hasAllOnes = true; break; }
+            }
+            if (hasAllOnes) continue;
+
+            // 打包为 LSB-first [in | out]（与 createDivisionTrails 同约定，
+            // 位 k ↔ sbox_in[k]/sbox_out[k]，对齐 .cl 与下游 SboxM/约简/Div3 管线）
+            std::vector<int> trail(2 * n, 0);
+            for (int bit = 0; bit < n; ++bit) trail[bit] = (l >> bit) & 1;
+            for (int bit = 0; bit < n; ++bit) trail[n + bit] = (u >> bit) & 1;
+            lDivTrails_.push_back(trail);
+        }
+    }
+
+    // 显式追加全 1 trail (全1‖全1)：通用规则因 π_{全1}(y) 含全 1 单项式而自排除它，
+    // 但它是合法 L-trail（1 → 1）。镜像参考实现的末尾追加。
+    lDivTrails_.push_back(std::vector<int>(2 * n, 1));
+
+    std::cout << "L-Division Trails of " << name_ << " computed: "
+              << lDivTrails_.size() << " trails found." << std::endl;
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=trail sbox=" << name_ << "_L"
+              << " elapsed_ms=" << _bench_ms
+              << " n_trails=" << lDivTrails_.size() << std::endl;
+}
+
+/**
+ * 将 L-set Division Trails 输出到文件
+ */
+void SboxDivTrails::printLDivisionTrails(const std::string& filename) {
+    if (lDivTrails_.empty()) {
+        createLDivisionTrails();
+    }
+
+    std::ofstream fileobj(filename);
+    fileobj << "L-Division Trails of sbox:" << std::endl;
+    for (const auto& trail : lDivTrails_) {
+        fileobj << "[";
+        for (int k = 0; k < static_cast<int>(trail.size()); ++k) {
+            fileobj << trail[k];
+            if (k < static_cast<int>(trail.size()) - 1) {
+                fileobj << ", ";
+            }
+        }
+        fileobj << "]" << std::endl;
+    }
+    fileobj << std::endl;
+    fileobj.close();
+
+    std::cout << "L-Division Trails written to: " << filename << std::endl;
+}
