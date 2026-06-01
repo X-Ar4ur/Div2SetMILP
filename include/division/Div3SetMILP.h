@@ -36,6 +36,7 @@
 #include "Transformer.h"
 #include "Interpreter.h"
 #include "DivMILPcons.h"
+#include "BdptMILPcons.h"
 
 #include "gurobi_c++.h"
 
@@ -74,6 +75,19 @@ private:
     // Active S-box inequality selector for the current round (see ChainMode).
     ChainMode chainMode = CHAIN_K;
 
+    // Key-XOR cross propagation state (Phase 3, Algorithm 3).
+    //   crossRound  = the round t (1-based) whose head Key-XOR is the cross
+    //                 (L_t -> K_t*). -1 means "pure single-mode" (no cross,
+    //                 used for the K-chain diff anchor and the M_L model).
+    //   pureMode    = the fixed chain mode used when crossRound == -1.
+    //   currentRound= the round index (1-based) programGenModel is emitting.
+    //   crossLBits  = the L-bit MILP indices entering the t-th Key-XOR, used
+    //                 to emit constraint (a) once per Key-XOR layer.
+    int crossRound = -1;
+    ChainMode pureMode = CHAIN_K;
+    int currentRound = 0;
+    std::vector<int> crossLBits;
+
     int xCounter = 1;
     int dCounter = 1;
 
@@ -103,10 +117,22 @@ private:
     // loaded inequalities / S-box sizes / Box persist across resets.
     void resetState();
 
-    // Build one standalone model in `mode` and write it to `modelFile`. Mirrors
-    // Div2SetMILP::buildModel(): TAC walk -> objective + initial + constraints +
-    // Binary section. Resets walker state first.
+    // Shared .lp finalizer: reads the round-function constraints already
+    // written to modelPath, then rewrites the file as objective (Minimize sum
+    // of outputBitIndices) + initial L/activebit constraints + constraints +
+    // Binary section. Uses the current walker state (xCounter / blockSize /
+    // outputBitIndices). modeTag only labels the log line.
+    void writeLpFile(const std::string& modeTag);
+
+    // Build one pure single-mode model (no Key-XOR cross) into modelFile.
+    // CHAIN_K -> Div2-equivalent K-chain diff anchor; CHAIN_L -> M_L (the full
+    // r-round L propagation used by Algorithm 4's parity test). Resets state.
     void buildChainModel(ChainMode mode, const std::string& modelFile);
+
+    // Build model M_t (Algorithm 3): rounds [1, t) use O_l (L-chain), the head
+    // Key-XOR of round t is the cross (L_t -> K_t*), rounds [t, r] use O_k
+    // (K-chain) to K_r*. Objective Minimize sum k_i^r*. Resets state.
+    void buildMtModel(int t, const std::string& modelFile);
 
 public:
     Div3SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,

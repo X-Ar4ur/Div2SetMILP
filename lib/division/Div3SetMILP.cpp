@@ -173,6 +173,9 @@ void Div3SetMILP::resetState() {
     this->constantTan.clear();
     this->consTanNameMxVal.clear();
     this->liveChain.clear();
+    this->crossRound = -1;
+    this->currentRound = 0;
+    this->crossLBits.clear();
 }
 
 
@@ -252,7 +255,7 @@ void Div3SetMILP::preprocess() {
 
 
 void Div3SetMILP::MGR() {
-    std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling (Phase 2) =====" << std::endl;
+    std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling (Phase 3) =====" << std::endl;
     std::cout << "Cipher: " << this->cipherName
               << ", Rounds: " << this->rounds
               << ", Active bits: " << this->activebitsSpec << std::endl;
@@ -265,48 +268,46 @@ void Div3SetMILP::MGR() {
     std::string base = milpDir + this->cipherName + "_" + std::to_string(this->rounds)
                        + "_" + this->activebitsSpec + "_subset3";
 
-    // K-chain model: faithful clone of the Div2 model (zero-regression diff
-    // anchor). L-chain model: full r-round L propagation (M_L), the base for the
-    // Phase 4 decision.
+    // K-chain diff anchor (Div2-equivalent; not part of the BDPT model set, kept
+    // as a regression artifact / Stopping Rule 1 sanity).
     buildChainModel(CHAIN_K, base + "_K.lp");
-    buildChainModel(CHAIN_L, base + "_L.lp");
 
-    std::cout << "\n===== Phase 2 complete: K-chain and L-chain models generated =====" << std::endl;
-    std::cout << "  K-chain (diff anchor vs Div2): " << base << "_K.lp" << std::endl;
-    std::cout << "  L-chain (M_L):                 " << base << "_L.lp" << std::endl;
-    std::cout << "  Key-XOR cross propagation (Phase 3) and per-bit decision /\n"
-              << "  counting solver (Phase 4) are not wired yet; see\n"
-              << "  doc/three_subset_bdpt_plan.md." << std::endl;
+    // M_L: full r-round L propagation (Algorithm 4 line 3). Used by the parity
+    // (0/1) test in Phase 4; for now generated as the L-chain anchor.
+    buildChainModel(CHAIN_L, base + "_ML.lp");
+
+    // Model set P = {M_1, ..., M_{r-1}} (Algorithm 3). M_t crosses at the head
+    // Key-XOR of round t. The r-th Key-XOR is ignored (Remark 2).
+    for (int t = 1; t < this->rounds; ++t) {
+        buildMtModel(t, base + "_Mt" + std::to_string(t) + ".lp");
+    }
+
+    std::cout << "\n===== Phase 3 complete: BDPT model set generated =====" << std::endl;
+    std::cout << "  M_L (full L-chain):  " << base << "_ML.lp" << std::endl;
+    std::cout << "  Model set P:         " << base << "_Mt1.lp .. _Mt"
+              << (this->rounds - 1) << ".lp  (" << (this->rounds - 1) << " models)" << std::endl;
+    std::cout << "  Per-output-bit decision / counting solver (Phase 4) is not\n"
+              << "  wired yet; see doc/three_subset_bdpt_plan.md." << std::endl;
 }
 
 
-void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) {
-    auto _bench_t0 = std::chrono::steady_clock::now();
-
-    resetState();
-    this->chainMode = mode;
-    this->modelPath = modelFile;
-
-    // Clear model file.
-    std::ofstream clearFile(this->modelPath, std::ios::trunc);
-    clearFile.close();
-
-    // Step 1: Generate constraints via TAC traversal (writes to modelPath).
-    programGenModel();
-
-    // Step 2: Read generated constraints.
+// Shared .lp finalizer. Assumes the round-function constraints have already
+// been written to modelPath by programGenModel(); rewrites the file with the
+// objective + initial constraints prepended and the Binary section appended.
+void Div3SetMILP::writeLpFile(const std::string& modeTag) {
     std::ifstream file(this->modelPath);
     std::string constraints, line;
     while (std::getline(file, line)) { constraints += line + "\n"; }
     file.close();
 
-    // Step 3: Rewrite as a complete .lp file (objective + initial + constraints).
     std::ofstream model(this->modelPath, std::ios::trunc);
     if (!model) {
         std::cout << "ERROR: Cannot write model file: " << this->modelPath << std::endl;
         assert(false);
     }
 
+    // Objective: Minimize sum of final-round output bits (K_r* for M_t and the
+    // K-chain anchor; L_r for the M_L L-chain).
     model << "Minimize\n";
     for (int i = 0; i < (int)this->outputBitIndices.size(); ++i) {
         model << "x" << this->outputBitIndices[i];
@@ -317,6 +318,9 @@ void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) 
 
     model << "Subject To\n";
 
+    // Initial BDPT: the L-chain starts from ell^0 = activebits pattern (the
+    // all-ones k chain is ignored by Stopping Rule 1, so every model here is
+    // seeded with the same activebit initial as the L input).
     std::vector<int> activeVars = this->resolveActiveBitVars();
     std::set<int> activeSet(activeVars.begin(), activeVars.end());
     for (int xi : activeVars) {
@@ -346,17 +350,32 @@ void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) 
     binary << "End";
     binary.close();
 
-    const char* modeTag = (mode == CHAIN_L) ? "L" : "K";
-    std::cout << modeTag << "-chain MILP model written to: " << this->modelPath << std::endl;
-    std::cout << "Variables: x1.." << (this->xCounter - 1);
-    if (this->dCounter > 1)
-        std::cout << ", d1.." << (this->dCounter - 1);
-    std::cout << std::endl;
+    std::cout << modeTag << " MILP model written to: " << this->modelPath
+              << "  (x1.." << (this->xCounter - 1) << ")" << std::endl;
+}
+
+
+void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) {
+    auto _bench_t0 = std::chrono::steady_clock::now();
+
+    resetState();
+    this->crossRound = -1;          // pure single-mode (no cross)
+    this->pureMode = mode;
+    this->chainMode = mode;
+    this->modelPath = modelFile;
+
+    std::ofstream clearFile(this->modelPath, std::ios::trunc);
+    clearFile.close();
+
+    programGenModel();
+
+    const char* modeTag = (mode == CHAIN_L) ? "L-chain" : "K-chain";
+    writeLpFile(modeTag);
 
     auto _bench_t1 = std::chrono::steady_clock::now();
     long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
     std::cerr << "[BENCH] phase=build cipher=" << this->cipherName
-              << " subset=3 chain=" << modeTag
+              << " subset=3 chain=" << (mode == CHAIN_L ? "L" : "K")
               << " rounds=" << this->rounds
               << " activebits=" << this->activebitsSpec
               << " elapsed_ms=" << _bench_ms
@@ -366,8 +385,37 @@ void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) 
 }
 
 
+void Div3SetMILP::buildMtModel(int t, const std::string& modelFile) {
+    auto _bench_t0 = std::chrono::steady_clock::now();
+
+    resetState();
+    this->crossRound = t;           // cross at the head Key-XOR of round t
+    this->chainMode = CHAIN_L;      // rounds before t use O_l; flipped in programGenModel
+    this->modelPath = modelFile;
+
+    std::ofstream clearFile(this->modelPath, std::ios::trunc);
+    clearFile.close();
+
+    programGenModel();
+
+    writeLpFile("Mt" + std::to_string(t));
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=build cipher=" << this->cipherName
+              << " subset=3 model=Mt" << t
+              << " cross_round=" << t
+              << " rounds=" << this->rounds
+              << " activebits=" << this->activebitsSpec
+              << " elapsed_ms=" << _bench_ms
+              << " n_xvars=" << (this->xCounter - 1)
+              << " block_size=" << this->blockSize << std::endl;
+}
+
+
 void Div3SetMILP::programGenModel() {
     int roundCounter = this->rounds;
+    int processed = 0;
     for (const auto& proc : this->procedureHs) {
         if (proc->getName() == "main") {
             std::string roundFuncId;
@@ -385,6 +433,20 @@ void Div3SetMILP::programGenModel() {
                     if (ele->getOp() == ASTNode::CALL) {
                         this->blockSize = tempSizeCounter;
                         tempSizeCounter = 0;
+
+                        // Round bookkeeping for Key-XOR cross propagation.
+                        // currentRound is 1-based. In an M_t build (crossRound
+                        // = t), rounds [1, t) use O_l and rounds [t, r] use O_k;
+                        // the head Key-XOR of round t is the cross. In a pure
+                        // build (crossRound == -1) the fixed pureMode is used.
+                        this->currentRound = ++processed;
+                        if (this->crossRound >= 1) {
+                            this->chainMode = (this->currentRound < this->crossRound)
+                                              ? CHAIN_L : CHAIN_K;
+                        } else {
+                            this->chainMode = this->pureMode;
+                        }
+
                         roundFuncId = ele->getLhs()->getNodeName().substr(0, ele->getLhs()->getNodeName().find("@"));
                         for (const auto& tproc : this->procedureHs) {
                             if (tproc->getName() == roundFuncId) {
@@ -453,11 +515,30 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
         ThreeAddressNodePtr ele = procedureH->getBlock().at(i);
 
         if (ele->getOp() == ASTNode::XOR) {
-            // Phase 2: Key-XOR is still skipped (same as Div2SetMILP). Phase 3
-            // replaces this branch with the L->K cross propagation at the split
-            // round t.
-            if (ele->getLhs()->getNodeName().find(keyId) != std::string::npos or
-                ele->getRhs()->getNodeName().find(keyId) != std::string::npos) {}
+            bool leftKey = ele->getLhs()->getNodeName().find(keyId) != std::string::npos;
+            bool rightKey = ele->getRhs()->getNodeName().find(keyId) != std::string::npos;
+            if (leftKey or rightKey) {
+                // Key-XOR. In an M_t build, the head Key-XOR of round t is the
+                // BDPT cross (Algorithm 3): n_input_i = input_i ^ key_i, where
+                // the non-key operand is the L bit ell_i^t. Allocate k_i^t* (a
+                // fresh K* variable), emit constraint (b) k_i >= ell_i, collect
+                // ell_i for constraint (a), and bind the result to k_i so the
+                // round's S-box reads K_t*. Every other Key-XOR is ignored
+                // (skipped), matching Div2SetMILP and Algorithm 3.
+                if (this->crossRound >= 1 && this->currentRound == this->crossRound) {
+                    ThreeAddressNodePtr lNode = leftKey ? ele->getRhs() : ele->getLhs();
+                    int lIdx = 0;
+                    auto it = this->tanNameMxIndex.find(lNode->getNodeName());
+                    if (it != this->tanNameMxIndex.end()) lIdx = it->second;
+                    else assert(false);  // L bit must already be bound (round input)
+                    int kIdx = this->xCounter++;
+                    BdptMILPcons::bdptCrossDominanceC(this->modelPath, lIdx, kIdx);
+                    this->crossLBits.push_back(lIdx);
+                    this->tanNameMxIndex[ele->getNodeName()] = kIdx;
+                    functionCallFlag = true;
+                }
+                // else: ignored Key-XOR (no constraint), same as Phase 2 / Div2.
+            }
             else if (this->isConstant(ele->getLhs()) or this->isConstant(ele->getRhs())) {}
             else {
                 functionCallFlag = true;
@@ -566,6 +647,14 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             }
         } else
             functionCallFlag = false;
+    }
+
+    // Cross constraint (a): once per Key-XOR layer of the cross round,
+    // ell_0^t + ell_1^t + ... + ell_{s-1}^t <= s - 1, over the s key-covered
+    // L bits collected during this round's Key-XORs.
+    if (this->crossRound >= 1 && this->currentRound == this->crossRound && !this->crossLBits.empty()) {
+        BdptMILPcons::bdptCrossNotAllOneC(this->modelPath, this->crossLBits);
+        this->crossLBits.clear();
     }
 
     this->rtnIdxSave.clear();
