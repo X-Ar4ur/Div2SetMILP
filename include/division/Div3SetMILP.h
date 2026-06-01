@@ -134,6 +134,18 @@ private:
     // (K-chain) to K_r*. Objective Minimize sum k_i^r*. Resets state.
     void buildMtModel(int t, const std::string& modelFile);
 
+    // Algorithm 4 (unknown test): load model M_t from lpFile and enumerate every
+    // output COORDINATE q for which e_q is a feasible K_r* (a reachable unit
+    // vector). Uses minimize(sum K_r*) subject to (sum K_r* >= 1) with iterative
+    // pinning. `outIdx` is the model's outputBitIndices (outIdx[j] = MILP var of
+    // output coordinate j). Returns the set of reachable coordinates j.
+    std::set<int> solveMtReachableCoords(const std::string& lpFile,
+                                         const std::vector<int>& outIdx);
+
+    // Orchestrate the BDPT search: build + solve each M_t, union the reachable
+    // (unknown) coordinates, and report the balanced coordinates (complement).
+    void searchDistinguisher();
+
 public:
     Div3SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
                 const std::string& activebitsSpec, const std::string& cipherName);

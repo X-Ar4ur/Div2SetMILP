@@ -255,7 +255,7 @@ void Div3SetMILP::preprocess() {
 
 
 void Div3SetMILP::MGR() {
-    std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling (Phase 3) =====" << std::endl;
+    std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling (Phase 4) =====" << std::endl;
     std::cout << "Cipher: " << this->cipherName
               << ", Rounds: " << this->rounds
               << ", Active bits: " << this->activebitsSpec << std::endl;
@@ -265,29 +265,160 @@ void Div3SetMILP::MGR() {
     std::string milpDir = this->pathPrefix + "milp/";
     (void)system(("mkdir -p " + milpDir).c_str());
 
+    this->resultsPath = milpDir + "result_" + std::to_string(this->rounds)
+                        + "_" + this->activebitsSpec + "_subset3.txt";
+
+    // Run Algorithm 4: build + solve the model set P = {M_1, ..., M_{r-1}} and
+    // report the balanced output coordinates.
+    searchDistinguisher();
+
+    std::cout << "\n===== 3-subset BDPT distinguisher search complete =====" << std::endl;
+}
+
+
+std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
+                                                  const std::vector<int>& outIdx) {
+    std::set<int> reachable;
+
+    GRBEnv env = GRBEnv(true);
+    env.set(GRB_IntParam_Threads, this->gurobiThreads);
+    env.set(GRB_IntParam_OutputFlag, 0);
+    env.start();
+    GRBModel model = GRBModel(env, lpFile);
+    model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
+    model.set(GRB_IntParam_MIPFocus, 1);
+
+    // Map output coordinate j -> its GRBVar (by name "x{outIdx[j]}").
+    std::vector<GRBVar> outVars(outIdx.size());
+    GRBLinExpr outSum = 0;
+    for (int j = 0; j < (int)outIdx.size(); ++j) {
+        outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
+        outSum += outVars[j];
+    }
+
+    // Algorithm 4 unknown test, enumerated efficiently: minimize sum K_r* with
+    // sum K_r* >= 1 (the all-zero output is not a unit vector and must be
+    // excluded), then iteratively pin each found unit coordinate to 0. Every
+    // objective value of 1 yields one reachable unit vector e_q.
+    model.addConstr(outSum >= 1, "nonzero_output");
+
+    while ((int)reachable.size() < (int)outIdx.size()) {
+        model.optimize();
+        int status = model.get(GRB_IntAttr_Status);
+        if (status == GRB_OPTIMAL) {
+            double objVal = model.get(GRB_DoubleAttr_ObjVal);
+            if (objVal > 1.5) {
+                break; // smallest remaining nonzero K_r* has weight >= 2: no more units
+            }
+            // obj == 1: exactly one output coordinate is set; find and pin it.
+            bool found = false;
+            for (int j = 0; j < (int)outIdx.size(); ++j) {
+                if (reachable.count(j)) continue;
+                if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) {
+                    reachable.insert(j);
+                    outVars[j].set(GRB_DoubleAttr_UB, 0);
+                    model.update();
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) break; // safety: obj==1 but no unpinned unit found
+        } else if (status == GRB_INFEASIBLE) {
+            break; // sum>=1 unsatisfiable once all reachable units are pinned
+        } else {
+            std::cout << "WARNING: Gurobi status " << status << " for " << lpFile << std::endl;
+            break;
+        }
+    }
+    return reachable;
+}
+
+
+void Div3SetMILP::searchDistinguisher() {
+    auto _bench_t0 = std::chrono::steady_clock::now();
+
+    std::string milpDir = this->pathPrefix + "milp/";
     std::string base = milpDir + this->cipherName + "_" + std::to_string(this->rounds)
                        + "_" + this->activebitsSpec + "_subset3";
 
-    // K-chain diff anchor (Div2-equivalent; not part of the BDPT model set, kept
-    // as a regression artifact / Stopping Rule 1 sanity).
-    buildChainModel(CHAIN_K, base + "_K.lp");
+    // Union of unknown output coordinates across the model set P.
+    std::set<int> unknownCoords;
+    int nModels = this->rounds - 1; // M_1 .. M_{r-1} (Remark 2: r-th ignored)
 
-    // M_L: full r-round L propagation (Algorithm 4 line 3). Used by the parity
-    // (0/1) test in Phase 4; for now generated as the L-chain anchor.
-    buildChainModel(CHAIN_L, base + "_ML.lp");
+    std::ofstream result(this->resultsPath, std::ios::trunc);
+    result << "===== 3-subset BDPT integral distinguisher search =====\n";
+    result << "Cipher: " << this->cipherName << ", Rounds: " << this->rounds
+           << ", Active bits: " << this->activebitsSpec << "\n";
+    result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
+    result.close();
 
-    // Model set P = {M_1, ..., M_{r-1}} (Algorithm 3). M_t crosses at the head
-    // Key-XOR of round t. The r-th Key-XOR is ignored (Remark 2).
     for (int t = 1; t < this->rounds; ++t) {
-        buildMtModel(t, base + "_Mt" + std::to_string(t) + ".lp");
+        std::string lpFile = base + "_Mt" + std::to_string(t) + ".lp";
+        buildMtModel(t, lpFile);
+        // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
+        std::vector<int> outIdx = this->outputBitIndices;
+
+        std::set<int> reach = solveMtReachableCoords(lpFile, outIdx);
+        for (int j : reach) unknownCoords.insert(j);
+
+        std::ofstream r(this->resultsPath, std::ios::app);
+        r << "M_" << t << " (cross@round " << t << "): reachable unit coords = {";
+        bool first = true;
+        for (int j : reach) { r << (first ? "" : ",") << j; first = false; }
+        r << "}  (" << reach.size() << ")\n";
+        r.close();
+
+        std::cerr << "[BENCH] phase=solve_mt cipher=" << this->cipherName
+                  << " subset=3 model=Mt" << t
+                  << " n_reachable=" << reach.size() << std::endl;
     }
 
-    std::cout << "\n===== Phase 3 complete: BDPT model set generated =====" << std::endl;
-    std::cout << "  M_L (full L-chain):  " << base << "_ML.lp" << std::endl;
-    std::cout << "  Model set P:         " << base << "_Mt1.lp .. _Mt"
-              << (this->rounds - 1) << ".lp  (" << (this->rounds - 1) << " models)" << std::endl;
-    std::cout << "  Per-output-bit decision / counting solver (Phase 4) is not\n"
-              << "  wired yet; see doc/three_subset_bdpt_plan.md." << std::endl;
+    // Balanced coordinates = all output coordinates not reachable as a unit
+    // vector in any M_t. (Per the goldens we report balanced count/coords; the
+    // 0/1 parity split via M_L is deferred.)
+    std::vector<int> balanced;
+    for (int j = 0; j < this->blockSize; ++j) {
+        if (!unknownCoords.count(j)) balanced.push_back(j);
+    }
+
+    std::ofstream r(this->resultsPath, std::ios::app);
+    r << "\nUnknown coords (" << unknownCoords.size() << "): {";
+    bool f1 = true;
+    for (int j : unknownCoords) { r << (f1 ? "" : ",") << j; f1 = false; }
+    r << "}\n";
+    r << "Balanced coords (" << balanced.size() << "): {";
+    bool f2 = true;
+    for (int j : balanced) { r << (f2 ? "" : ",") << j; f2 = false; }
+    r << "}\n\n";
+    if (!balanced.empty())
+        r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits)\n";
+    else
+        r << "Integral Distinguisher does NOT exist\n";
+    r.close();
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+
+    std::cout << "\nBDPT result: " << balanced.size() << " balanced bits, "
+              << unknownCoords.size() << " unknown (block size " << this->blockSize << ")" << std::endl;
+    if (!balanced.empty())
+        std::cout << "*** Integral Distinguisher Found! (" << balanced.size()
+                  << " balanced bits) ***" << std::endl;
+    else
+        std::cout << "*** Integral Distinguisher does NOT exist ***" << std::endl;
+    std::cout << "Results saved to: " << this->resultsPath << std::endl;
+
+    std::cerr << "[BENCH] phase=solve cipher=" << this->cipherName
+              << " subset=3"
+              << " rounds=" << this->rounds
+              << " activebits=" << this->activebitsSpec
+              << " elapsed_ms=" << _bench_ms
+              << " n_models=" << nModels
+              << " n_balanced=" << balanced.size()
+              << " n_unknown=" << unknownCoords.size()
+              << " block_size=" << this->blockSize
+              << " distinguisher_found=" << (balanced.empty() ? 0 : 1)
+              << " threads=" << this->gurobiThreads << std::endl;
 }
 
 
