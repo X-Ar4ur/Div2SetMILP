@@ -32,7 +32,7 @@ std::string cipherName;
 
 void SboxModelingMGR(std::vector<std::string> params);
 void MILPMGR(std::vector<std::string> params);
-// subset: 2 = CBDP (2-subset, `-div`), 3 = BDPT (3-subset, `-div3`)
+// subset: 2 = CBDP (2子集, `-div`), 3 = BDPT (3子集, `-div3`)
 void DivTrailsMGR(std::vector<std::string> params, int subset = 2);
 
 int main(int argc, const char* argv[]) {
@@ -40,13 +40,12 @@ int main(int argc, const char* argv[]) {
     for (int i = 1; i < argc; ++i) {
         params.emplace_back(argv[i]);
     }
-    // sbox modeling
     if (argc > 1 and params[0] == "-div") {
         std::vector<std::string> divParams(params.begin() + 1, params.end());
-        DivTrailsMGR(divParams, 2);   // 2-subset CBDP
+        DivTrailsMGR(divParams, 2);   // CBDP
     } else if (argc > 1 and params[0] == "-div3") {
         std::vector<std::string> divParams(params.begin() + 1, params.end());
-        DivTrailsMGR(divParams, 3);   // 3-subset BDPT
+        DivTrailsMGR(divParams, 3);   // BDPT
     } else if (argc == 6) {
         SboxModelingMGR(params);
     } else if (argc >= 8) {
@@ -312,24 +311,20 @@ void MILPMGR(std::vector<std::string> params) {
 void DivTrailsMGR(std::vector<std::string> params, int subset) {
     if (params.empty()) {
         std::cout << "Usage: ./EasyBC -div CIPHER [reductionMethod] [rounds] [activebits]" << std::endl;
-        std::cout << "       activebits: integer (e.g. 60) for MSB-first legacy semantics," << std::endl;
-        std::cout << "                   or R<k> / L<m> / L<m>R<k> for SIMON/Simeck right/left word." << std::endl;
         return;
     }
-
     std::string divCipherName = params[0];
-
-    // 可选：第 2 个参数指定约简方法 (1..7)，缺省为 1 (greedy_sun)
-    // 后续 rounds/activebits 依次后移到第 3、4 个参数（仅用于触发 MILP 建模）
     int reductionMethod = 1;
     if (params.size() >= 2) {
-        try { reductionMethod = std::stoi(params[1]); }
-        catch (...) { reductionMethod = 1; }
+        try {
+            reductionMethod = std::stoi(params[1]);
+        } catch (...) {
+            reductionMethod = 1;
+        }
     }
     std::cout << "Reduction method: " << reductionMethod << std::endl;
 
-    // Structured bench header — emitted regardless of whether MILP modeling
-    // step runs, so a parser can attribute subsequent [BENCH] phase lines.
+    // 局部作用域，显示配置参数
     {
         std::string _bench_rounds = (params.size() >= 3) ? params[2] : "-";
         std::string _bench_activebits = (params.size() >= 4) ? params[3] : "-";
@@ -340,7 +335,7 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
                   << " subset=" << subset << std::endl;
     }
 
-    // 查找对应的 .cl 文件名
+    // 查找对应的 .cl 文件
     std::string RunCipherName = setup::cryptPrimitiveMap[divCipherName];
     std::string filePath = "../benchmarks/" + setup::cryptPrimitiveSetMap[divCipherName] + "/" + RunCipherName + ".cl";
 
@@ -396,13 +391,13 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
             model.reduceInequalities(reductionMethod);
             model.saveReducedInequalities(outputDir);
 
-            // 3-subset BDPT: additionally compute the S-box L-set division
-            // trails (Algorithm 1, L part) and their reduced inequalities.
-            // Passing "<sbox>_L" as the model's sbox name makes both
-            // SboxM::fromPointSet's SageMath paths and the reduced-inequality
-            // file name carry the _L suffix automatically, so the K file
-            // (<sbox>_Reduce_Inequalities.txt, consumed by Div2SetMILP) is
-            // never overwritten. Reuses the same reduction method as K.
+            // 3-subset BDPT：额外计算 S-box 的 L 集可分性 trails
+            //（算法 1 的 L 部分），并约简对应的不等式。
+            // 将 "<sbox>_L" 作为模型中的 S-box 名称传入，使
+            // SboxM::fromPointSet 使用的 SageMath 路径和约简不等式文件名
+            // 自动带上 _L 后缀。这样不会覆盖 K 集文件
+            //（<sbox>_Reduce_Inequalities.txt，由 Div2SetMILP 使用）。
+            // L 集沿用与 K 集相同的约简方法。
             if (subset == 3) {
                 sboxDivTrails.createLDivisionTrails();
                 std::string lTrailsFile = outputDir + sboxName + "_L_DivisionTrails.txt";
@@ -428,9 +423,10 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
 
     if (params.size() >= 4) {
         int divRounds = std::stoi(params[2]);
-        // activebits spec: plain integer (e.g. "60") keeps legacy MSB-first
-        // semantics; "R<k>" / "L<m>R<k>" / "L<m>" target the right/left word
-        // of a Feistel-style cipher (SIMON, Simeck). See Div2SetMILP.cpp.
+        // activebits spec: plain integer (e.g. "60") keeps the legacy
+        // cipher-specific preset; "R<k>" / "L<m>R<k>" / "L<m>" target the
+        // right/left word of a Feistel-style cipher (SIMON, Simeck), and
+        // "hex:<mask>" selects an explicit block mask. See Div2SetMILP.cpp.
         std::string divActivebitsSpec = params[3];
 
         // Run Transformer to get procedureHs for TAC traversal
