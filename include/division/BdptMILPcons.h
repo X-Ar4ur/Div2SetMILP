@@ -38,6 +38,18 @@ namespace BdptMILPcons {
     // lIndices holds the MILP indices of the s key-covered L bits (ell_i^t).
     void bdptCrossNotAllOneC(std::string path, const std::vector<int>& lIndices);
 
+    // Hamming-weight increment, once per Key-XOR layer:
+    //   (x{k0} + ... ) - (x{l0} + ... ) = 1
+    // Proposition 1 builds K_t* as ell ∨ e_j for a SINGLE key-covered zero
+    // position j, i.e. K_t* has exactly one more set bit than L_t. Constraints
+    // (a)+(b) alone only force K_t* ⊇ L_t (any superset), which over-approximates
+    // K_r and saturates every output bit; this equality pins the increment to 1.
+    // kIndices / lIndices are the per-bit K_t* and L_t MILP indices of the layer
+    // (full-block Key-XOR, s = n: every state bit is key-covered).
+    void bdptCrossWeightIncrementC(std::string path,
+                                   const std::vector<int>& kIndices,
+                                   const std::vector<int>& lIndices);
+
 }
 
 #endif //EASYBC_BDPTMILPCONS_H

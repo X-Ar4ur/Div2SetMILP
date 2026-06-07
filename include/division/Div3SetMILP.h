@@ -81,12 +81,17 @@ private:
     //                 used for the K-chain diff anchor and the M_L model).
     //   pureMode    = the fixed chain mode used when crossRound == -1.
     //   currentRound= the round index (1-based) programGenModel is emitting.
-    //   crossLBits  = the L-bit MILP indices entering the t-th Key-XOR, used
-    //                 to emit constraint (a) once per Key-XOR layer.
+    //   crossLBits  = the L-bit MILP indices entering the t-th Key-XOR (ell_i^t),
+    //                 used to emit constraints (a) and the weight increment once
+    //                 per Key-XOR layer.
+    //   crossKBits  = the matching K*-bit MILP indices (k_i^t*) produced by the
+    //                 cross, paired with crossLBits for the Sum(k)-Sum(l)=1 layer
+    //                 constraint.
     int crossRound = -1;
     ChainMode pureMode = CHAIN_K;
     int currentRound = 0;
     std::vector<int> crossLBits;
+    std::vector<int> crossKBits;
 
     int xCounter = 1;
     int dCounter = 1;
@@ -141,6 +146,20 @@ private:
     // output coordinate j). Returns the set of reachable coordinates j.
     std::set<int> solveMtReachableCoords(const std::string& lpFile,
                                          const std::vector<int>& outIdx);
+
+    // Algorithm 4 (parity test): count the r-round pure-L trails of M_L that
+    // reach ell^r = e_coord (fix outIdx[coord]=1, all other outputs=0) and return
+    // the parity of that count. mlLpFile is the M_L model written by
+    // buildChainModel(CHAIN_L, ...); mlOutIdx[j] is the MILP var of L_r
+    // coordinate j. Returns:
+    //    0  even number of solutions  => q-th output bit sum is 0 (balanced),
+    //    1  odd  number of solutions  => q-th output bit sum is 1 (constant one),
+    //   -1  the count hit the solution-pool cap or the solve timed out
+    //       (parity unknown; the bit is determined but not provably balanced).
+    // solCount returns the enumerated (possibly capped) count for logging.
+    int classifyMLParity(const std::string& mlLpFile,
+                         const std::vector<int>& mlOutIdx,
+                         int coord, long long& solCount);
 
     // Orchestrate the BDPT search: build + solve each M_t, union the reachable
     // (unknown) coordinates, and report the balanced coordinates (complement).

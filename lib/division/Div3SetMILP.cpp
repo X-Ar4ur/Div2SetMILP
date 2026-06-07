@@ -176,6 +176,7 @@ void Div3SetMILP::resetState() {
     this->crossRound = -1;
     this->currentRound = 0;
     this->crossLBits.clear();
+    this->crossKBits.clear();
 }
 
 
@@ -334,6 +335,70 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
 }
 
 
+// Algorithm 4 second half (Stopping Rule 2 / lines 14-20): decide the parity of
+// the q-th output bit by COUNTING the r-round pure-L trails of M_L that end at
+// the unit vector ell^r = e_q. Distinct binary solutions of the MILP are in
+// bijection with division trails for L, so Gurobi's solution pool gives the
+// trail count; only its parity matters (odd => sum 1, even => sum 0). Returns
+// -1 when the count cannot be trusted (pool cap reached or time limit), so the
+// caller can keep such a bit out of the "balanced" set (soundness over recall).
+int Div3SetMILP::classifyMLParity(const std::string& mlLpFile,
+                                  const std::vector<int>& mlOutIdx,
+                                  int coord, long long& solCount) {
+    solCount = 0;
+
+    GRBEnv env = GRBEnv(true);
+    env.set(GRB_IntParam_Threads, this->gurobiThreads);
+    env.set(GRB_IntParam_OutputFlag, 0);
+    env.start();
+    GRBModel model = GRBModel(env, mlLpFile);
+
+    // Per-bit budget: parity enumeration must not run away. A determined bit with
+    // a large feasible L-region can make exhaustive solution-pool search explode,
+    // and the total cost grows with (#determined bits x per-bit time). Cap both
+    // the time and the pool size; exceeding either yields an "indeterminate"
+    // parity (sound: such a bit is simply not claimed balanced).
+    int parityTimeLimit = std::min(this->gurobiTimer, 120);
+    model.set(GRB_DoubleParam_TimeLimit, (double)parityTimeLimit);
+
+    // Counting needs every feasible solution, not the minimum, so neutralize the
+    // .lp's "Minimize sum L_r" objective to a constant.
+    GRBLinExpr zeroObj = 0;
+    model.setObjective(zeroObj, GRB_MINIMIZE);
+
+    // Fix ell^r = e_q: outIdx[coord] = 1, every other output coordinate = 0.
+    for (int j = 0; j < (int)mlOutIdx.size(); ++j) {
+        GRBVar v = model.getVarByName("x" + std::to_string(mlOutIdx[j]));
+        double b = (j == coord) ? 1.0 : 0.0;
+        v.set(GRB_DoubleAttr_LB, b);
+        v.set(GRB_DoubleAttr_UB, b);
+    }
+
+    // Systematically enumerate all feasible 0-1 solutions (each = one L-trail).
+    // The cap is large enough for the exact parity in normal cases but bounds
+    // memory/time; if the count reaches it, the true parity is unknown.
+    const int POOL_CAP = 2000000;
+    model.set(GRB_IntParam_PoolSearchMode, 2);
+    model.set(GRB_IntParam_PoolSolutions, POOL_CAP);
+    model.set(GRB_DoubleParam_PoolGap, GRB_INFINITY);
+    model.optimize();
+
+    int status = model.get(GRB_IntAttr_Status);
+    if (status == GRB_INFEASIBLE) {
+        solCount = 0;       // no L-trail reaches e_q => even => sum 0 (balanced)
+        return 0;
+    }
+    if (status != GRB_OPTIMAL) {
+        // TIME_LIMIT or other: the enumeration is incomplete -> parity unknown.
+        solCount = model.get(GRB_IntAttr_SolCount);
+        return -1;
+    }
+    solCount = model.get(GRB_IntAttr_SolCount);
+    if (solCount >= POOL_CAP) return -1;     // capped: true count (parity) unknown
+    return (int)(solCount & 1LL);
+}
+
+
 void Div3SetMILP::searchDistinguisher() {
     auto _bench_t0 = std::chrono::steady_clock::now();
 
@@ -342,6 +407,15 @@ void Div3SetMILP::searchDistinguisher() {
                        + "_" + this->activebitsSpec + "_subset3";
 
     // Union of unknown output coordinates across the model set P.
+    //
+    // Round-range alignment: the .cl models each round as [head Key-XOR, S-box,
+    // P-box], so crossRound = t (cross at round t's head Key-XOR) has exactly
+    // (t-1) preceding L-rounds. The paper's model set P = {M_1, ..., M_{r-1}}
+    // uses tau = 1..r-1 L-rounds before the cross, hence crossRound t = 2..r.
+    // (t = 1 would cross on the plaintext with 0 L-rounds; with the weight-1
+    // increment its K_1* = ell ∨ e_j has weight |activebits|+1 and is dead, so
+    // it is simply outside P. Critically, t = r IS in P and must be included --
+    // dropping it under-counts the unknown set and would over-claim balanced.)
     std::set<int> unknownCoords;
     int nModels = this->rounds - 1; // M_1 .. M_{r-1} (Remark 2: r-th ignored)
 
@@ -352,7 +426,7 @@ void Div3SetMILP::searchDistinguisher() {
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 
-    for (int t = 1; t < this->rounds; ++t) {
+    for (int t = 2; t <= this->rounds; ++t) {
         std::string lpFile = base + "_Mt" + std::to_string(t) + ".lp";
         buildMtModel(t, lpFile);
         // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
@@ -373,25 +447,57 @@ void Div3SetMILP::searchDistinguisher() {
                   << " n_reachable=" << reach.size() << std::endl;
     }
 
-    // Balanced coordinates = all output coordinates not reachable as a unit
-    // vector in any M_t. (Per the goldens we report balanced count/coords; the
-    // 0/1 parity split via M_L is deferred.)
-    std::vector<int> balanced;
+    // ---- Algorithm 4, second half (Stopping Rule 2): classify each DETERMINED
+    // output coordinate (not a reachable K_r* unit in any M_t) as sum 0 or sum 1
+    // via the parity of M_L's solution count. M_L is the full r-round pure-L
+    // chain (every Key-XOR ignored => identity on ell); built once and reused.
+    std::vector<int> determined;
     for (int j = 0; j < this->blockSize; ++j) {
-        if (!unknownCoords.count(j)) balanced.push_back(j);
+        if (!unknownCoords.count(j)) determined.push_back(j);
     }
 
+    std::vector<int> balanced;       // parity even -> sum 0 (the integral distinguisher)
+    std::vector<int> constantOne;    // parity odd  -> sum 1
+    std::vector<int> indeterminate;  // pool cap / time limit -> parity unknown
+    if (!determined.empty()) {
+        std::string mlFile = base + "_ML.lp";
+        buildChainModel(CHAIN_L, mlFile);            // M_L; sets outputBitIndices = L_r
+        std::vector<int> mlOut = this->outputBitIndices;
+        for (int q : determined) {
+            long long solCount = 0;
+            int parity = classifyMLParity(mlFile, mlOut, q, solCount);
+            if (parity == 0)      balanced.push_back(q);
+            else if (parity == 1) constantOne.push_back(q);
+            else                  indeterminate.push_back(q);
+            std::cerr << "[BENCH] phase=parity_ml cipher=" << this->cipherName
+                      << " subset=3 coord=" << q
+                      << " solcount=" << solCount
+                      << " parity=" << parity << std::endl;
+        }
+    }
+
+    auto writeCoordSet = [](std::ofstream& os, const char* label,
+                            const std::vector<int>& v) {
+        os << label << " (" << v.size() << "): {";
+        bool first = true;
+        for (int j : v) { os << (first ? "" : ",") << j; first = false; }
+        os << "}\n";
+    };
+
     std::ofstream r(this->resultsPath, std::ios::app);
-    r << "\nUnknown coords (" << unknownCoords.size() << "): {";
-    bool f1 = true;
-    for (int j : unknownCoords) { r << (f1 ? "" : ",") << j; f1 = false; }
-    r << "}\n";
-    r << "Balanced coords (" << balanced.size() << "): {";
-    bool f2 = true;
-    for (int j : balanced) { r << (f2 ? "" : ",") << j; f2 = false; }
-    r << "}\n\n";
+    {
+        r << "\nUnknown coords (" << unknownCoords.size() << "): {";
+        bool f1 = true;
+        for (int j : unknownCoords) { r << (f1 ? "" : ",") << j; f1 = false; }
+        r << "}\n";
+    }
+    writeCoordSet(r, "Balanced (sum=0) coords", balanced);
+    writeCoordSet(r, "Constant-one (sum=1) coords", constantOne);
+    if (!indeterminate.empty())
+        writeCoordSet(r, "Indeterminate (parity capped/timeout) coords", indeterminate);
+    r << "\n";
     if (!balanced.empty())
-        r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits)\n";
+        r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits, sum=0)\n";
     else
         r << "Integral Distinguisher does NOT exist\n";
     r.close();
@@ -399,11 +505,13 @@ void Div3SetMILP::searchDistinguisher() {
     auto _bench_t1 = std::chrono::steady_clock::now();
     long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
 
-    std::cout << "\nBDPT result: " << balanced.size() << " balanced bits, "
+    std::cout << "\nBDPT result: " << balanced.size() << " balanced (sum=0), "
+              << constantOne.size() << " constant-one (sum=1), "
+              << indeterminate.size() << " indeterminate, "
               << unknownCoords.size() << " unknown (block size " << this->blockSize << ")" << std::endl;
     if (!balanced.empty())
         std::cout << "*** Integral Distinguisher Found! (" << balanced.size()
-                  << " balanced bits) ***" << std::endl;
+                  << " balanced bits, sum=0) ***" << std::endl;
     else
         std::cout << "*** Integral Distinguisher does NOT exist ***" << std::endl;
     std::cout << "Results saved to: " << this->resultsPath << std::endl;
@@ -415,6 +523,8 @@ void Div3SetMILP::searchDistinguisher() {
               << " elapsed_ms=" << _bench_ms
               << " n_models=" << nModels
               << " n_balanced=" << balanced.size()
+              << " n_one=" << constantOne.size()
+              << " n_indeterminate=" << indeterminate.size()
               << " n_unknown=" << unknownCoords.size()
               << " block_size=" << this->blockSize
               << " distinguisher_found=" << (balanced.empty() ? 0 : 1)
@@ -665,6 +775,7 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                     int kIdx = this->xCounter++;
                     BdptMILPcons::bdptCrossDominanceC(this->modelPath, lIdx, kIdx);
                     this->crossLBits.push_back(lIdx);
+                    this->crossKBits.push_back(kIdx);
                     this->tanNameMxIndex[ele->getNodeName()] = kIdx;
                     functionCallFlag = true;
                 }
@@ -780,12 +891,17 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             functionCallFlag = false;
     }
 
-    // Cross constraint (a): once per Key-XOR layer of the cross round,
-    // ell_0^t + ell_1^t + ... + ell_{s-1}^t <= s - 1, over the s key-covered
-    // L bits collected during this round's Key-XORs.
+    // Cross layer constraints, once per Key-XOR layer of the cross round, over
+    // the s key-covered bits collected during this round's Key-XORs:
+    //   (a) ell_0^t + ... + ell_{s-1}^t <= s - 1                (not all-ones)
+    //   (weight) Sum(k_i^t*) - Sum(ell_i^t) = 1                 (K_t* = ell ∨ e_j)
+    // The weight increment is what keeps K_t* tight (without it, (a)+(b) admit
+    // any superset of L_t and every output bit saturates).
     if (this->crossRound >= 1 && this->currentRound == this->crossRound && !this->crossLBits.empty()) {
         BdptMILPcons::bdptCrossNotAllOneC(this->modelPath, this->crossLBits);
+        BdptMILPcons::bdptCrossWeightIncrementC(this->modelPath, this->crossKBits, this->crossLBits);
         this->crossLBits.clear();
+        this->crossKBits.clear();
     }
 
     this->rtnIdxSave.clear();

@@ -26,3 +26,24 @@ void BdptMILPcons::bdptCrossNotAllOneC(std::string path, const std::vector<int>&
     }
     scons.close();
 }
+
+void BdptMILPcons::bdptCrossWeightIncrementC(std::string path,
+                                             const std::vector<int>& kIndices,
+                                             const std::vector<int>& lIndices) {
+    if (kIndices.empty() || lIndices.empty()) return;
+    std::ofstream scons(path, std::ios::app);
+    if (!scons) {
+        std::cout << "Wrong file path in bdptCrossWeightIncrementC!" << std::endl;
+    } else {
+        // Sum(k_i^t*) - Sum(ell_i^t) = 1  : K_t* = ell ∨ e_j (exactly one more bit)
+        for (int i = 0; i < (int)kIndices.size(); ++i) {
+            if (i > 0) scons << " + ";
+            scons << "x" << kIndices[i];
+        }
+        for (int i = 0; i < (int)lIndices.size(); ++i) {
+            scons << " - x" << lIndices[i];
+        }
+        scons << " = 1\n";
+    }
+    scons.close();
+}
