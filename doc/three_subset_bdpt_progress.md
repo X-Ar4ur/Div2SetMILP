@@ -9,8 +9,16 @@
 ## 0. 一句话现状
 
 3-subset BDPT 积分区分器搜索已在 EasyBC 落地，与现有 2-subset CBDP（`Div2SetMILP`）**并存**。
-**Phase 0–4 全部完成、验证、提交**；唯一待办是 **Phase 5 的 cross 轮对齐校准**（用 Rectangle
-改进案例），以及后续 Phase 6（SIMON/Simeck）。
+**Phase 0–5（代码层）全部完成、验证、提交**：Algorithm 4 含 K 链 unknown 测试 **+ M_L 奇偶计数**
+（0/1 判定）；cross 三条约束 (a)+(b)+权重；轮范围对齐 `[2,r]`。PRESENT 9r/60 golden 通过、
+2-subset 零回归、单调性（BDPT ⊇ CBDP）从未违反。
+
+**唯一未达成的目标是复现论文 Rectangle 10 轮 9 平衡位**（见 §8）。已用大量实验 + 离线证据
+把 L-trail、约简、cross 权重、奇偶、单调性逐一排除，定位到 **cross 的 `e_j` 自由位与模型集并集
+的相互作用**，但论文只给一句话、开源码只有 SIMON 版（Feistel 专属编码），无法对照 SPN cross。
+**Rectangle 复现挂为已知 open issue。** 后续 Phase 6（SIMON/Simeck）未动。
+
+> 2026-06-08 更新见 §8。§3 旧的"cross 轮对齐是唯一待办"已过时（那只是问题之一，已修）。
 
 ---
 
@@ -155,6 +163,57 @@ CMakeLists.txt                   ← 已登记 Div3SetMILP.cpp/.h + BdptMILPcons
 
 - 论文：`refer/MinerU_markdown_A_Model_Set_Method...md`（§3.4 Key-XOR + Algorithm 3、
   §4 初始/停止规则 + Algorithm 4、Appendix E 证明、Appendix F 区分器 golden）。
-- 参考库（**仅对照、不照搬**）：`refer/bdpt_ref_repo/`（`algorithm3_4__Cross_propagation.py`
-  是 SIMON 版 Key-XOR+搜索；`algorithm1__sbox.py` 是 L-trail）。
+- 参考库（**仅对照、不照搬**）：`refer/bdpt_ref_repo/`。**重要**：`algorithm1__sbox.py`（S-box
+  K/L trail）和 `algorithm2__main.py`（约简）是**通用**的（接受任意 S-box）；但
+  `algorithm3_4__Cross_propagation.py`（Algorithm 3+4，Key-XOR cross + 搜索）**只有 SIMON 版**
+  （`class Simon`，硬编码 Feistel 轮 + 旋转常数）。论文报了 PRESENT/Rectangle/GIFT 结果，但
+  **产生这些 SPN 结果的 cross/搜索代码没开源**。SIMON 的 cross 把密钥字 K 钉成全 1（`x_next=c`），
+  是 Feistel 专属，**不能搬到 SPN**。
 - 设计方案：`doc/three_subset_bdpt_plan.md`。
+
+---
+
+## 8. 2026-06-08 更新：Algorithm 4 奇偶补全 + cross 修正 + Rectangle open issue
+
+### 8.1 本轮完成的代码（已提交，PRESENT 零回归）
+1. **Algorithm 4 第二半（M_L 奇偶计数）**：`Div3SetMILP::classifyMLParity()`。对每个"已确定"位
+   （不在任何 M_t 的 unknown 并集里），载入 M_L（整 r 轮纯 L 链，`buildChainModel(CHAIN_L)`），
+   固定 `ℓ^r = e_q`，用 Gurobi solution pool（`PoolSearchMode=2`）枚举 L-trail 数取奇偶：
+   **偶（含 0）→ sum=0 平衡；奇 → sum=1 常数；超 pool 上限/超时 → indeterminate（保守不算平衡）**。
+   per-bit 时限 `min(timer,120)s`、pool 上限 2×10⁶，防穷举爆炸。结果文件 + `[BENCH]` 增
+   `Balanced(sum=0)/Constant-one(sum=1)/Indeterminate` 三段、`phase=parity_ml`。
+2. **cross 权重增量约束 `Σk_t* − Σℓ_t = 1`**（`BdptMILPcons::bdptCrossWeightIncrementC`）。
+   ⚠️ **修正 §2.1 与本文旧版的错误结论**：论文 Proposition 1（正文 line 389）是
+   "对 ℓ 的每个零位算 `ℓ∨1`"，即 **K_t* 恰好比 ℓ_t 多一位**。光有 (a)+(b)，(b)=`K_t*⊇ℓ`
+   是任意超集，K_t* 可膨胀 → 全位饱和。必须加权重等式。`crossKBits` 配 `crossLBits` 一并收集。
+3. **轮范围 `[1,r-1]` → `[2,r]`**（`searchDistinguisher` 循环）。.cl 每轮 `[KeyXOR,Sbox,Pbox]`，
+   cross 在轮 t 轮首 ⟺ 前面 t−1 个 L 轮 ⟺ 论文 M_{t−1}；P={M_1..M_{r−1}} ⟺ t=2..r。
+   旧 `[1,r-1]` **漏了 t=r（最紧模型，unsound：漏算 unknown→误报平衡）**，且含退化 t=1。
+
+### 8.2 验证（全过）
+- PRESENT 9r/60：**1 平衡位**（coord 0，parity 偶）= committed golden。`elapsed≈30min`。
+- PRESENT 4r/60：64 平衡 = CBDP（60/63 活动位 4 轮太少，全平衡正确）。
+- 单调性：Rectangle 9r `hex:fffffffffffffffe` BDPT=32 = CBDP 9r=32，从未 BDPT<CBDP。
+
+### 8.3 ⚠️ Rectangle 10 轮 9 平衡位 —— 未复现（open issue）
+**现象**：`-div3 Rectangle 1 10 hex:fffffffffffffffe`（63 活动位）→ **0 平衡**（应 9）。
+所有 M_t 在 10 轮饱和到 64；9 轮时正常（Mt2=22,…,Mt9=7，并集=32=CBDP）。CBDP 10 轮在
+**所有 4 个常数行**都 = 0 平衡（RECTANGLE 列循环不变，常数位只有行重要）。即 **BDPT ≡ CBDP，
+没体现论文的多 1 轮改进**。
+
+**已逐一排除（带证据）**：
+- L-trail：`scripts/verify_ltrail.py` 离线复算 = 80 条（论文 Table 3 |L|=80），**且 `SizeReduce_l`
+  对 Rectangle 是 no-op**（`K̄(全1)={1111}`，无 L 输出 ⪰ 1111）。所以 plan §7 风险 2 担心的
+  L-trail/SizeReduce **不是病根**。单 S-box 下 `O_l ⊆ O_k`，L 轮确实更紧。
+- cross 权重 `Σk=Σℓ+1`：已加，PRESENT 各模型确实收紧。
+- 奇偶：正确（PRESENT 过）。单调性：从未违反。
+
+**定位到的疑点**：cross 的 **`e_j` 自由位**——`K_t* = ℓ^t ∨ e_j`，额外的 1 可落在 ℓ^t 任一零位。
+即使多 L 轮把 ℓ^t 收得很紧，`e_j` 又把可达性散开，使中段 M_t 重新 ≈ CBDP，并集被其主导。
+这是论文一句话带过、**SPN 编码未开源**（仅 SIMON 版，Feistel 专属）的部分，无法对照核实。
+
+**续作建议**：(a) 读 Appendix E（Proposition 1 证明）抠 SPN cross 是否有额外约束 / `e_j` 是否
+真自由；(b) 设法拿论文作者的 SPN cross/搜索代码；(c) 复核 EasyBC 与论文的轮计数口径（我的 10r
+= CBDP 9r→10r 急塌，疑似差一）。**在拿到 SPN 参考前不要再盲跑慢 MILP**（每个 10r 约 11min）。
+
+**离线脚本**：`scripts/verify_ltrail.py`（重算 Rectangle L-trail + SizeReduce_l 验证，秒级）。
