@@ -50,6 +50,21 @@ namespace BdptMILPcons {
                                    const std::vector<int>& kIndices,
                                    const std::vector<int>& lIndices);
 
+    // Exact selector encoding for Proposition 1:
+    // choose exactly one key-covered zero bit of L_t and set that bit in K_t*.
+    //
+    // For each paired bit:
+    //   sum d_i = 1
+    //   d_i + l_i <= 1
+    //   k_i - l_i - d_i = 0
+    //
+    // dCounter is the caller-owned binary auxiliary counter. The writer emits
+    // d{dCounter}, d{dCounter+1}, ... and advances dCounter past the last one.
+    void bdptCrossExactOneFlipC(std::string path,
+                                const std::vector<int>& kIndices,
+                                const std::vector<int>& lIndices,
+                                int& dCounter);
+
 }
 
 #endif //EASYBC_BDPTMILPCONS_H

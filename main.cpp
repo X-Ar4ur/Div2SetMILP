@@ -391,13 +391,10 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
             model.reduceInequalities(reductionMethod);
             model.saveReducedInequalities(outputDir);
 
-            // 3-subset BDPT：额外计算 S-box 的 L 集可分性 trails
-            //（算法 1 的 L 部分），并约简对应的不等式。
-            // 将 "<sbox>_L" 作为模型中的 S-box 名称传入，使
-            // SboxM::fromPointSet 使用的 SageMath 路径和约简不等式文件名
-            // 自动带上 _L 后缀。这样不会覆盖 K 集文件
-            //（<sbox>_Reduce_Inequalities.txt，由 Div2SetMILP 使用）。
-            // L 集沿用与 K 集相同的约简方法。
+            // 3-subset BDPT：另外计算Sbox的L-trails（算法1的L部分），并约简对应的不等式。
+            // 将"<sbox>_L"作为模型中的Sbox名称传入，使SboxM::fromPointSet使用的SageMath路径和约简不等式文件名自动带上_L后缀。
+            // K-Trails（<sbox>_Reduce_Inequalities.txt，由Div2SetMILP使用）。
+            // L集采用与K集相同的约简方法。
             if (subset == 3) {
                 sboxDivTrails.createLDivisionTrails();
                 std::string lTrailsFile = outputDir + sboxName + "_L_DivisionTrails.txt";
@@ -423,28 +420,27 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
 
     if (params.size() >= 4) {
         int divRounds = std::stoi(params[2]);
-        // activebits spec: plain integer (e.g. "60") keeps the legacy
-        // cipher-specific preset; "R<k>" / "L<m>R<k>" / "L<m>" target the
-        // right/left word of a Feistel-style cipher (SIMON, Simeck), and
-        // "hex:<mask>" selects an explicit block mask. See Div2SetMILP.cpp.
         std::string divActivebitsSpec = params[3];
 
-        // Run Transformer to get procedureHs for TAC traversal
+        // 运行Transformer获取procedureHs进行TAC遍历
         std::vector<ProcValuePtr> procs = interpreter.getProcs();
         Transformer transformer(procs);
         transformer.transformProcedures();
         std::vector<ProcedureHPtr> procedureHs = transformer.getProcedureHs();
 
         if (subset == 3) {
-            // 3-subset BDPT (Algorithm 3+4). Phase 0 ships a skeleton; the
-            // model-set construction and counting solver are added in later
-            // phases (see doc/three_subset_bdpt_plan.md).
+            // 3子集BDPT，还需继续完善。
             Div3SetMILP div3set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
             for (int i = 4; i < (int)params.size() - 1; i += 2) {
                 if (params[i] == "timer") {
                     div3set.setGurobiTimer(std::stoi(params[i + 1]));
                 } else if (params[i] == "threads") {
                     div3set.setGurobiThreads(std::stoi(params[i + 1]));
+                } else if (params[i] == "sign") {
+                    // Optional 0/1 sign labeling of balanced bits via M_L parity
+                    // (default off: balanced bits reported as 'b'). NBB is the
+                    // same either way; sign labeling never drops a balanced bit.
+                    div3set.setSignLabeling(std::stoi(params[i + 1]) != 0);
                 }
             }
             div3set.MGR();

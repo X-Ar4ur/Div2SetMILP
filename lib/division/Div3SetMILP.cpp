@@ -152,6 +152,8 @@ int Div3SetMILP::consumeCopy(int rawIdx) {
     if (rawIdx <= 0) return rawIdx;
     int live = rawIdx;
     while (this->liveChain.count(live)) live = this->liveChain[live];
+    // SPN (no fan-out): skip the identity split entirely (see header note).
+    if (!this->lazyCopyEnabled) return live;
     int a = this->xCounter++;
     int b = this->xCounter++;
     DivMILPcons::divCopyC(this->modelPath, live, std::vector<int>{a, b});
@@ -278,7 +280,8 @@ void Div3SetMILP::MGR() {
 
 
 std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
-                                                  const std::vector<int>& outIdx) {
+                                                  const std::vector<int>& outIdx,
+                                                  const std::set<int>& skip) {
     std::set<int> reachable;
 
     GRBEnv env = GRBEnv(true);
@@ -287,48 +290,55 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
     env.start();
     GRBModel model = GRBModel(env, lpFile);
     model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
-    model.set(GRB_IntParam_MIPFocus, 1);
+    model.set(GRB_DoubleParam_NodefileStart, 0.5);
+    // Paper Algorithm 4 / Stopping Rule 2: for each output coordinate q, fix
+    // K_r* = e_q (q-th bit 1, every other output bit 0) and test FEASIBILITY of
+    // M_t. If feasible, e_q is a reachable unit vector and q is unknown.
+    //
+    // Fixing the FULL output to a unit vector is far cheaper than the old
+    // minimize-and-pin over a free output: the fixed e_q propagates backward
+    // through the K-chain, cross and L-chain and prunes the (loose) search hard,
+    // so each query is a quick SAT/UNSAT check instead of a global optimisation.
+    model.set(GRB_IntParam_MIPFocus, 1);     // find a feasible point fast
+    model.set(GRB_IntParam_SolutionLimit, 1); // stop at the first feasible point
+    GRBLinExpr zeroObj = 0;                    // pure feasibility: neutralise objective
+    model.setObjective(zeroObj, GRB_MINIMIZE);
 
-    // Map output coordinate j -> its GRBVar (by name "x{outIdx[j]}").
     std::vector<GRBVar> outVars(outIdx.size());
-    GRBLinExpr outSum = 0;
     for (int j = 0; j < (int)outIdx.size(); ++j) {
         outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
-        outSum += outVars[j];
     }
+    model.update();
 
-    // Algorithm 4 unknown test, enumerated efficiently: minimize sum K_r* with
-    // sum K_r* >= 1 (the all-zero output is not a unit vector and must be
-    // excluded), then iteratively pin each found unit coordinate to 0. Every
-    // objective value of 1 yields one reachable unit vector e_q.
-    model.addConstr(outSum >= 1, "nonzero_output");
+    for (int q = 0; q < (int)outIdx.size(); ++q) {
+        if (skip.count(q)) continue;          // already known unknown in another M_t
 
-    while ((int)reachable.size() < (int)outIdx.size()) {
+        // Fix output = e_q.
+        for (int j = 0; j < (int)outIdx.size(); ++j) {
+            double b = (j == q) ? 1.0 : 0.0;
+            outVars[j].set(GRB_DoubleAttr_LB, b);
+            outVars[j].set(GRB_DoubleAttr_UB, b);
+        }
+        model.update();
         model.optimize();
+
         int status = model.get(GRB_IntAttr_Status);
-        if (status == GRB_OPTIMAL) {
-            double objVal = model.get(GRB_DoubleAttr_ObjVal);
-            if (objVal > 1.5) {
-                break; // smallest remaining nonzero K_r* has weight >= 2: no more units
-            }
-            // obj == 1: exactly one output coordinate is set; find and pin it.
-            bool found = false;
-            for (int j = 0; j < (int)outIdx.size(); ++j) {
-                if (reachable.count(j)) continue;
-                if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) {
-                    reachable.insert(j);
-                    outVars[j].set(GRB_DoubleAttr_UB, 0);
-                    model.update();
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) break; // safety: obj==1 but no unpinned unit found
-        } else if (status == GRB_INFEASIBLE) {
-            break; // sum>=1 unsatisfiable once all reachable units are pinned
-        } else {
-            std::cout << "WARNING: Gurobi status " << status << " for " << lpFile << std::endl;
-            break;
+        int solCount = model.get(GRB_IntAttr_SolCount);
+        if (solCount > 0) {
+            reachable.insert(q);              // e_q feasible -> q is unknown
+        } else if (status != GRB_INFEASIBLE) {
+            // Neither a solution nor a proof of infeasibility (e.g. TIME_LIMIT):
+            // be conservative and treat q as reachable (unknown), never claiming
+            // a bit balanced on an unsettled solve.
+            reachable.insert(q);
+            std::cout << "WARNING: Gurobi status " << status << " (no proof) for "
+                      << lpFile << " coord " << q << std::endl;
+        }
+
+        // Release the bounds for the next coordinate.
+        for (int j = 0; j < (int)outIdx.size(); ++j) {
+            outVars[j].set(GRB_DoubleAttr_LB, 0.0);
+            outVars[j].set(GRB_DoubleAttr_UB, 1.0);
         }
     }
     return reachable;
@@ -426,53 +436,66 @@ void Div3SetMILP::searchDistinguisher() {
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 
-    for (int t = 2; t <= this->rounds; ++t) {
-        std::string lpFile = base + "_Mt" + std::to_string(t) + ".lp";
-        buildMtModel(t, lpFile);
+    for (int tau = 1; tau <= nModels; ++tau) {
+        int crossRound = tau + 1;
+        std::string lpFile = base + "_Mt" + std::to_string(tau) + ".lp";
+        buildMtModel(crossRound, lpFile);
         // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
         std::vector<int> outIdx = this->outputBitIndices;
 
-        std::set<int> reach = solveMtReachableCoords(lpFile, outIdx);
+        // Pass the running unknown set as skip: a coordinate already shown
+        // unknown by an earlier M_t need not be re-tested here (the union is all
+        // that matters), which prunes the per-q feasibility loop substantially.
+        std::set<int> reach = solveMtReachableCoords(lpFile, outIdx, unknownCoords);
         for (int j : reach) unknownCoords.insert(j);
 
         std::ofstream r(this->resultsPath, std::ios::app);
-        r << "M_" << t << " (cross@round " << t << "): reachable unit coords = {";
+        r << "M_" << tau << " (cross@round " << crossRound << "): reachable unit coords = {";
         bool first = true;
         for (int j : reach) { r << (first ? "" : ",") << j; first = false; }
         r << "}  (" << reach.size() << ")\n";
         r.close();
 
         std::cerr << "[BENCH] phase=solve_mt cipher=" << this->cipherName
-                  << " subset=3 model=Mt" << t
+                  << " subset=3 model=Mt" << tau
+                  << " cross_round=" << crossRound
                   << " n_reachable=" << reach.size() << std::endl;
     }
 
-    // ---- Algorithm 4, second half (Stopping Rule 2): classify each DETERMINED
-    // output coordinate (not a reachable K_r* unit in any M_t) as sum 0 or sum 1
-    // via the parity of M_L's solution count. M_L is the full r-round pure-L
-    // chain (every Key-XOR ignored => identity on ell); built once and reused.
-    std::vector<int> determined;
+    // ---- Algorithm 4, second half (Stopping Rule 2). Every DETERMINED output
+    // coordinate (not reachable as a K_r* unit vector in any M_t) is a BALANCED
+    // bit. The paper's NBB counts ALL determined bits; the 0/1 sign is only a
+    // *label* (sum=0 vs sum=1) obtained from the parity of M_L's solution count,
+    // and the paper itself leaves it as 'b' (0-or-1) when unresolved (e.g. all 16
+    // bits of GIFT-64). Therefore the sign step must NEVER drop a determined bit.
+    //   balanced = determined            (NBB; the integral distinguisher)
+    //   sum0 / sum1 / bSign              (optional 0 / 1 / 'b' refinement)
+    std::vector<int> balanced;       // = determined: all balanced bits (NBB)
     for (int j = 0; j < this->blockSize; ++j) {
-        if (!unknownCoords.count(j)) determined.push_back(j);
+        if (!unknownCoords.count(j)) balanced.push_back(j);
     }
 
-    std::vector<int> balanced;       // parity even -> sum 0 (the integral distinguisher)
-    std::vector<int> constantOne;    // parity odd  -> sum 1
-    std::vector<int> indeterminate;  // pool cap / time limit -> parity unknown
-    if (!determined.empty()) {
-        std::string mlFile = base + "_ML.lp";
-        buildChainModel(CHAIN_L, mlFile);            // M_L; sets outputBitIndices = L_r
-        std::vector<int> mlOut = this->outputBitIndices;
-        for (int q : determined) {
-            long long solCount = 0;
-            int parity = classifyMLParity(mlFile, mlOut, q, solCount);
-            if (parity == 0)      balanced.push_back(q);
-            else if (parity == 1) constantOne.push_back(q);
-            else                  indeterminate.push_back(q);
-            std::cerr << "[BENCH] phase=parity_ml cipher=" << this->cipherName
-                      << " subset=3 coord=" << q
-                      << " solcount=" << solCount
-                      << " parity=" << parity << std::endl;
+    std::vector<int> sum0;     // parity even, resolved -> sum 0
+    std::vector<int> sum1;     // parity odd,  resolved -> sum 1
+    std::vector<int> bSign;    // sign unresolved (disabled / capped / timeout) -> 'b'
+    if (!balanced.empty()) {
+        if (this->signLabeling) {
+            std::string mlFile = base + "_ML.lp";
+            buildChainModel(CHAIN_L, mlFile);        // M_L; sets outputBitIndices = L_r
+            std::vector<int> mlOut = this->outputBitIndices;
+            for (int q : balanced) {
+                long long solCount = 0;
+                int parity = classifyMLParity(mlFile, mlOut, q, solCount);
+                if (parity == 0)      sum0.push_back(q);
+                else if (parity == 1) sum1.push_back(q);
+                else                  bSign.push_back(q);   // unresolved but STILL balanced
+                std::cerr << "[BENCH] phase=parity_ml cipher=" << this->cipherName
+                          << " subset=3 coord=" << q
+                          << " solcount=" << solCount
+                          << " parity=" << parity << std::endl;
+            }
+        } else {
+            bSign = balanced;   // sign step skipped: report every balanced bit as 'b'
         }
     }
 
@@ -491,13 +514,15 @@ void Div3SetMILP::searchDistinguisher() {
         for (int j : unknownCoords) { r << (f1 ? "" : ",") << j; f1 = false; }
         r << "}\n";
     }
-    writeCoordSet(r, "Balanced (sum=0) coords", balanced);
-    writeCoordSet(r, "Constant-one (sum=1) coords", constantOne);
-    if (!indeterminate.empty())
-        writeCoordSet(r, "Indeterminate (parity capped/timeout) coords", indeterminate);
+    writeCoordSet(r, "Balanced bits (NBB)", balanced);
+    if (this->signLabeling) {
+        writeCoordSet(r, "  - sum=0 coords", sum0);
+        writeCoordSet(r, "  - sum=1 coords", sum1);
+        writeCoordSet(r, "  - 'b' (sign unresolved) coords", bSign);
+    }
     r << "\n";
     if (!balanced.empty())
-        r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits, sum=0)\n";
+        r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits)\n";
     else
         r << "Integral Distinguisher does NOT exist\n";
     r.close();
@@ -505,13 +530,15 @@ void Div3SetMILP::searchDistinguisher() {
     auto _bench_t1 = std::chrono::steady_clock::now();
     long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
 
-    std::cout << "\nBDPT result: " << balanced.size() << " balanced (sum=0), "
-              << constantOne.size() << " constant-one (sum=1), "
-              << indeterminate.size() << " indeterminate, "
-              << unknownCoords.size() << " unknown (block size " << this->blockSize << ")" << std::endl;
+    std::cout << "\nBDPT result: " << balanced.size() << " balanced (NBB)";
+    if (this->signLabeling)
+        std::cout << " [" << sum0.size() << " sum=0, " << sum1.size()
+                  << " sum=1, " << bSign.size() << " 'b']";
+    std::cout << ", " << unknownCoords.size() << " unknown (block size "
+              << this->blockSize << ")" << std::endl;
     if (!balanced.empty())
         std::cout << "*** Integral Distinguisher Found! (" << balanced.size()
-                  << " balanced bits, sum=0) ***" << std::endl;
+                  << " balanced bits) ***" << std::endl;
     else
         std::cout << "*** Integral Distinguisher does NOT exist ***" << std::endl;
     std::cout << "Results saved to: " << this->resultsPath << std::endl;
@@ -523,8 +550,10 @@ void Div3SetMILP::searchDistinguisher() {
               << " elapsed_ms=" << _bench_ms
               << " n_models=" << nModels
               << " n_balanced=" << balanced.size()
-              << " n_one=" << constantOne.size()
-              << " n_indeterminate=" << indeterminate.size()
+              << " n_sum0=" << sum0.size()
+              << " n_sum1=" << sum1.size()
+              << " n_bsign=" << bSign.size()
+              << " sign_labeling=" << (this->signLabeling ? 1 : 0)
               << " n_unknown=" << unknownCoords.size()
               << " block_size=" << this->blockSize
               << " distinguisher_found=" << (balanced.empty() ? 0 : 1)
@@ -762,9 +791,9 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                 // Key-XOR. In an M_t build, the head Key-XOR of round t is the
                 // BDPT cross (Algorithm 3): n_input_i = input_i ^ key_i, where
                 // the non-key operand is the L bit ell_i^t. Allocate k_i^t* (a
-                // fresh K* variable), emit constraint (b) k_i >= ell_i, collect
-                // ell_i for constraint (a), and bind the result to k_i so the
-                // round's S-box reads K_t*. Every other Key-XOR is ignored
+                // fresh K* variable), collect the pair for the selector cross
+                // layer, and bind the result to k_i so the round's S-box reads
+                // K_t*. Every other Key-XOR is ignored
                 // (skipped), matching Div2SetMILP and Algorithm 3.
                 if (this->crossRound >= 1 && this->currentRound == this->crossRound) {
                     ThreeAddressNodePtr lNode = leftKey ? ele->getRhs() : ele->getLhs();
@@ -773,7 +802,6 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                     if (it != this->tanNameMxIndex.end()) lIdx = it->second;
                     else assert(false);  // L bit must already be bound (round input)
                     int kIdx = this->xCounter++;
-                    BdptMILPcons::bdptCrossDominanceC(this->modelPath, lIdx, kIdx);
                     this->crossLBits.push_back(lIdx);
                     this->crossKBits.push_back(kIdx);
                     this->tanNameMxIndex[ele->getNodeName()] = kIdx;
@@ -891,6 +919,7 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             functionCallFlag = false;
     }
 
+    // Cross layer constraints use bdptCrossExactOneFlipC selector encoding.
     // Cross layer constraints, once per Key-XOR layer of the cross round, over
     // the s key-covered bits collected during this round's Key-XORs:
     //   (a) ell_0^t + ... + ell_{s-1}^t <= s - 1                (not all-ones)
@@ -898,8 +927,8 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
     // The weight increment is what keeps K_t* tight (without it, (a)+(b) admit
     // any superset of L_t and every output bit saturates).
     if (this->crossRound >= 1 && this->currentRound == this->crossRound && !this->crossLBits.empty()) {
-        BdptMILPcons::bdptCrossNotAllOneC(this->modelPath, this->crossLBits);
-        BdptMILPcons::bdptCrossWeightIncrementC(this->modelPath, this->crossKBits, this->crossLBits);
+        BdptMILPcons::bdptCrossExactOneFlipC(this->modelPath, this->crossKBits,
+                                             this->crossLBits, this->dCounter);
         this->crossLBits.clear();
         this->crossKBits.clear();
     }

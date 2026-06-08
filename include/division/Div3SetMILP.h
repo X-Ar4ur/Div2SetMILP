@@ -60,6 +60,24 @@ private:
     int gurobiTimer = 3600 * 24;
     int gurobiThreads = 8;
 
+    // Algorithm 4 sign labeling (Stopping Rule 2, second half). When false
+    // (default) every DETERMINED bit is reported as a balanced bit labelled 'b'
+    // (sum is 0 or 1) WITHOUT running the M_L parity count -- this reproduces the
+    // paper's NBB directly and fast (the reference repo also skips the sign step).
+    // When true, the M_L solution-count parity is used to refine 'b' into '0' or
+    // '1' on a best-effort, time-budgeted basis; a bit whose sign cannot be
+    // resolved stays 'b' and is NEVER dropped from the balanced set.
+    bool signLabeling = false;
+
+    // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by
+    // several operations, e.g. SIMON/Simeck where l_input feeds p1/p2/p3). The
+    // SPN ciphers handled here (PRESENT/Rectangle/GIFT) are bit-permutations with
+    // NO fan-out: every bit is read exactly once per round, so each consumeCopy()
+    // split is an identity that only bloats the model (~3008 -> ~1300 vars for
+    // PRESENT-9r) and slows Gurobi. Default off; a future SIMON/Feistel path
+    // (Phase 6) sets it true. Correctness is unchanged for fan-out-1 ciphers.
+    bool lazyCopyEnabled = false;
+
     std::string pathPrefix;
     std::string modelPath;
     std::string resultsPath;
@@ -82,11 +100,11 @@ private:
     //   pureMode    = the fixed chain mode used when crossRound == -1.
     //   currentRound= the round index (1-based) programGenModel is emitting.
     //   crossLBits  = the L-bit MILP indices entering the t-th Key-XOR (ell_i^t),
-    //                 used to emit constraints (a) and the weight increment once
+    //                 used to emit the exact selector cross constraints once
     //                 per Key-XOR layer.
     //   crossKBits  = the matching K*-bit MILP indices (k_i^t*) produced by the
-    //                 cross, paired with crossLBits for the Sum(k)-Sum(l)=1 layer
-    //                 constraint.
+    //                 cross, paired with crossLBits for the selector layer
+    //                 constraint K_t* = L_t OR e_j.
     int crossRound = -1;
     ChainMode pureMode = CHAIN_K;
     int currentRound = 0;
@@ -139,13 +157,15 @@ private:
     // (K-chain) to K_r*. Objective Minimize sum k_i^r*. Resets state.
     void buildMtModel(int t, const std::string& modelFile);
 
-    // Algorithm 4 (unknown test): load model M_t from lpFile and enumerate every
+    // Algorithm 4 (unknown test): load model M_t from lpFile and return every
     // output COORDINATE q for which e_q is a feasible K_r* (a reachable unit
-    // vector). Uses minimize(sum K_r*) subject to (sum K_r* >= 1) with iterative
-    // pinning. `outIdx` is the model's outputBitIndices (outIdx[j] = MILP var of
-    // output coordinate j). Returns the set of reachable coordinates j.
+    // vector => q unknown). For each q it FIXES the full output to e_q and tests
+    // feasibility (paper Stopping Rule 2), which prunes the loose L-chain hard.
+    // `outIdx[j]` = MILP var of output coordinate j; `skip` lists coordinates
+    // already known unknown from an earlier M_t (not re-tested).
     std::set<int> solveMtReachableCoords(const std::string& lpFile,
-                                         const std::vector<int>& outIdx);
+                                         const std::vector<int>& outIdx,
+                                         const std::set<int>& skip);
 
     // Algorithm 4 (parity test): count the r-round pure-L trails of M_L that
     // reach ell^r = e_coord (fix outIdx[coord]=1, all other outputs=0) and return
@@ -173,6 +193,7 @@ public:
 
     void setGurobiTimer(int timer) { this->gurobiTimer = timer; }
     void setGurobiThreads(int threads) { this->gurobiThreads = threads; }
+    void setSignLabeling(bool s) { this->signLabeling = s; }
 
     void MGR();
 

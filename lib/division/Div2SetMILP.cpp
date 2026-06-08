@@ -194,7 +194,7 @@ int Div2SetMILP::consumeCopy(int rawIdx) {
 
 
 void Div2SetMILP::preprocess() {
-    auto _bench_t0 = std::chrono::steady_clock::now();
+    auto _bench_t0 = std::chrono::steady_clock::now(); // 记录当前时间点
     int _bench_total_ineqs = 0;
     auto iterator = this->Box.begin();
     while (iterator != this->Box.end()) {
@@ -202,7 +202,6 @@ void Div2SetMILP::preprocess() {
             std::string sboxName = iterator->first;
             sboxSizeGet(sboxName, iterator->second);
 
-            // Read reduced inequalities
             std::string ineqFile = this->pathPrefix + sboxName + "_Reduce_Inequalities.txt";
             std::ifstream file(ineqFile);
             if (!file) {
@@ -210,8 +209,6 @@ void Div2SetMILP::preprocess() {
                 std::cout << "Reduced inequalities are generated automatically by "
                           << "./EasyBC -div " << this->cipherName << " [rounds] [activebits] "
                           << "before MILP Modeling starts." << std::endl;
-                std::cout << "This error usually means Algorithm 1+2 failed earlier, the output path is inconsistent, "
-                          << "or the file was removed manually." << std::endl;
                 assert(false);
             }
 
@@ -223,6 +220,8 @@ void Div2SetMILP::preprocess() {
                 lineNo++;
                 if (line.empty()) continue;
                 std::vector<int> ineq;
+
+                // 将字符串line包装成输入流，依次提取其中的整数。
                 std::istringstream iss(line);
                 int val;
                 while (iss >> val) {
@@ -257,12 +256,10 @@ void Div2SetMILP::preprocess() {
 
 void Div2SetMILP::MGR() {
     std::cout << "\n===== Step 3: Start Division Property MILP Modeling =====" << std::endl;
-    // std::cout << "Cipher: " << this->cipherName << std::endl;
     std::cout << "Rounds: " << this->rounds << ", Active bits: " << this->activebitsSpec << std::endl;
 
-    preprocess(); // Load reduced inequalities for Sbox
+    preprocess(); // 加载Sbox的约简不等式
 
-    // Setup paths
     std::string milpDir = this->pathPrefix + "milp/";
     (void)system(("mkdir -p " + milpDir).c_str());
 
@@ -271,7 +268,6 @@ void Div2SetMILP::MGR() {
     this->resultsPath = milpDir + "result_" + std::to_string(this->rounds)
                         + "_" + this->activebitsSpec + ".txt";
 
-    // Clear model file
     std::ofstream clearFile(this->modelPath, std::ios::trunc);
     clearFile.close();
 
@@ -284,16 +280,16 @@ void Div2SetMILP::MGR() {
 
 void Div2SetMILP::buildModel() {
     auto _bench_t0 = std::chrono::steady_clock::now();
-    // Step 1: Generate constraints via TAC traversal (writes to modelPath)
+    // 步骤1：通过TAC遍历生成约束（写入modelPath）
     programGenModel();
 
-    // Step 2: Read generated constraints
+    // 步骤2：读取生成的约束
     std::ifstream file(this->modelPath);
     std::string constraints, line;
     while (std::getline(file, line)) { constraints += line + "\n"; }
     file.close();
 
-    // Step 3: Rewrite as complete .lp file
+    // 步骤3：重写为完整的 .lp 文件
     std::ofstream model(this->modelPath, std::ios::trunc);
     if (!model) {
         std::cout << "ERROR: Cannot write model file: " << this->modelPath << std::endl;
