@@ -60,14 +60,15 @@ private:
     int gurobiTimer = 3600 * 24;
     int gurobiThreads = 8;
 
-    // Algorithm 4 sign labeling (Stopping Rule 2, second half). When false
-    // (default) every DETERMINED bit is reported as a balanced bit labelled 'b'
-    // (sum is 0 or 1) WITHOUT running the M_L parity count -- this reproduces the
-    // paper's NBB directly and fast (the reference repo also skips the sign step).
-    // When true, the M_L solution-count parity is used to refine 'b' into '0' or
-    // '1' on a best-effort, time-budgeted basis; a bit whose sign cannot be
-    // resolved stays 'b' and is NEVER dropped from the balanced set.
-    bool signLabeling = false;
+    // Algorithm 4 sign labeling (Stopping Rule 2, second half). Default true,
+    // exactly as the paper's Algorithm 4 lines 14-20 prescribe: M_L is built and
+    // the parity of its solution count labels every DETERMINED bit '0' (even
+    // count) or '1' (odd count). A bit whose parity cannot be resolved (time
+    // budget / pool cap / model sanity check) stays 'b' (balanced, sign unknown)
+    // and is NEVER dropped from the balanced set -- NBB is unaffected either
+    // way. `sign 0` on the command line skips the M_L parity stage entirely
+    // (fast NBB-only mode; every determined bit is reported as 'b').
+    bool signLabeling = true;
 
     // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by
     // several operations, e.g. SIMON/Simeck where l_input feeds p1/p2/p3). The
@@ -174,8 +175,11 @@ private:
     // coordinate j. Returns:
     //    0  even number of solutions  => q-th output bit sum is 0 (balanced),
     //    1  odd  number of solutions  => q-th output bit sum is 1 (constant one),
-    //   -1  the count hit the solution-pool cap or the solve timed out
-    //       (parity unknown; the bit is determined but not provably balanced).
+    //   -1  the solve hit the time budget (gurobiTimer) before enumerating all
+    //       solutions (parity unknown; the bit stays balanced, labelled 'b'),
+    //   -2  the count hit the solution-pool cap (parity unknown, 'b'),
+    //   -3  M_L failed the free-binary-variable sanity check (a variable in no
+    //       constraint doubles every count, so no parity can be trusted; 'b').
     // solCount returns the enumerated (possibly capped) count for logging.
     int classifyMLParity(const std::string& mlLpFile,
                          const std::vector<int>& mlOutIdx,

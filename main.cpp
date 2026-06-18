@@ -437,8 +437,9 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
                 } else if (params[i] == "threads") {
                     div3set.setGurobiThreads(std::stoi(params[i + 1]));
                 } else if (params[i] == "sign") {
-                    // Optional 0/1 sign labeling of balanced bits via M_L parity
-                    // (default off: balanced bits reported as 'b'). NBB is the
+                    // 0/1 sign labeling of balanced bits via M_L parity, paper
+                    // Algorithm 4 lines 14-20 (default ON). `sign 0` skips the
+                    // parity stage and reports balanced bits as 'b'. NBB is the
                     // same either way; sign labeling never drops a balanced bit.
                     div3set.setSignLabeling(std::stoi(params[i + 1]) != 0);
                 }

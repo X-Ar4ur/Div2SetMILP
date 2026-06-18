@@ -299,10 +299,13 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
     // minimize-and-pin over a free output: the fixed e_q propagates backward
     // through the K-chain, cross and L-chain and prunes the (loose) search hard,
     // so each query is a quick SAT/UNSAT check instead of a global optimisation.
+    //
+    // The .lp objective is kept as written (Minimize sum k_i^r*, paper
+    // Algorithm 3 line 4). With the whole output fixed to e_q it is the
+    // constant 1 on the feasible region, so the solve is a pure feasibility
+    // test either way.
     model.set(GRB_IntParam_MIPFocus, 1);     // find a feasible point fast
     model.set(GRB_IntParam_SolutionLimit, 1); // stop at the first feasible point
-    GRBLinExpr zeroObj = 0;                    // pure feasibility: neutralise objective
-    model.setObjective(zeroObj, GRB_MINIMIZE);
 
     std::vector<GRBVar> outVars(outIdx.size());
     for (int j = 0; j < (int)outIdx.size(); ++j) {
@@ -350,8 +353,8 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
 // the unit vector ell^r = e_q. Distinct binary solutions of the MILP are in
 // bijection with division trails for L, so Gurobi's solution pool gives the
 // trail count; only its parity matters (odd => sum 1, even => sum 0). Returns
-// -1 when the count cannot be trusted (pool cap reached or time limit), so the
-// caller can keep such a bit out of the "balanced" set (soundness over recall).
+// a negative code when the count cannot be trusted (see header), so the caller
+// keeps such a bit as 'b' instead of mislabelling it (soundness over recall).
 int Div3SetMILP::classifyMLParity(const std::string& mlLpFile,
                                   const std::vector<int>& mlOutIdx,
                                   int coord, long long& solCount) {
@@ -363,18 +366,32 @@ int Div3SetMILP::classifyMLParity(const std::string& mlLpFile,
     env.start();
     GRBModel model = GRBModel(env, mlLpFile);
 
-    // Per-bit budget: parity enumeration must not run away. A determined bit with
-    // a large feasible L-region can make exhaustive solution-pool search explode,
-    // and the total cost grows with (#determined bits x per-bit time). Cap both
-    // the time and the pool size; exceeding either yields an "indeterminate"
-    // parity (sound: such a bit is simply not claimed balanced).
-    int parityTimeLimit = std::min(this->gurobiTimer, 120);
-    model.set(GRB_DoubleParam_TimeLimit, (double)parityTimeLimit);
+    // Sanity check: the trail/solution bijection breaks if any binary variable
+    // appears in no constraint -- such a variable is free to take both values,
+    // doubling every count and silently forcing every parity to "even". Refuse
+    // to label anything from this model rather than report wrong signs.
+    int numVars = model.get(GRB_IntAttr_NumVars);
+    for (int i = 0; i < numVars; ++i) {
+        GRBVar v = model.getVar(i);
+        if (model.getCol(v).size() == 0) {
+            std::cout << "ERROR: M_L sanity check failed: variable "
+                      << v.get(GRB_StringAttr_VarName)
+                      << " appears in no constraint; parity counts cannot be trusted."
+                      << std::endl;
+            return -3;
+        }
+    }
 
-    // Counting needs every feasible solution, not the minimum, so neutralize the
-    // .lp's "Minimize sum L_r" objective to a constant.
-    GRBLinExpr zeroObj = 0;
-    model.setObjective(zeroObj, GRB_MINIMIZE);
+    // Paper Algorithm 4 assumes an exact solution count for M_L. Use the same
+    // user-configurable budget as every other solve (`timer N`); if the
+    // enumeration cannot finish inside it, the bit keeps the sound 'b'
+    // fallback instead of getting a wrong label.
+    model.set(GRB_DoubleParam_TimeLimit, (double)this->gurobiTimer);
+
+    // The .lp objective is kept as written (Minimize sum ell_i^r, paper
+    // Algorithm 4 line 2). With the whole output fixed to e_q it is the
+    // constant 1 on the feasible region, and PoolGap = infinity below makes
+    // the pool enumerate every feasible solution regardless of objective.
 
     // Fix ell^r = e_q: outIdx[coord] = 1, every other output coordinate = 0.
     for (int j = 0; j < (int)mlOutIdx.size(); ++j) {
@@ -404,7 +421,7 @@ int Div3SetMILP::classifyMLParity(const std::string& mlLpFile,
         return -1;
     }
     solCount = model.get(GRB_IntAttr_SolCount);
-    if (solCount >= POOL_CAP) return -1;     // capped: true count (parity) unknown
+    if (solCount >= POOL_CAP) return -2;     // capped: true count (parity) unknown
     return (int)(solCount & 1LL);
 }
 
@@ -477,7 +494,8 @@ void Div3SetMILP::searchDistinguisher() {
 
     std::vector<int> sum0;     // parity even, resolved -> sum 0
     std::vector<int> sum1;     // parity odd,  resolved -> sum 1
-    std::vector<int> bSign;    // sign unresolved (disabled / capped / timeout) -> 'b'
+    std::vector<int> bSign;    // sign unresolved (disabled / fallback) -> 'b'
+    std::map<int, std::string> bSignWhy;   // coord -> fallback reason
     if (!balanced.empty()) {
         if (this->signLabeling) {
             std::string mlFile = base + "_ML.lp";
@@ -488,7 +506,12 @@ void Div3SetMILP::searchDistinguisher() {
                 int parity = classifyMLParity(mlFile, mlOut, q, solCount);
                 if (parity == 0)      sum0.push_back(q);
                 else if (parity == 1) sum1.push_back(q);
-                else                  bSign.push_back(q);   // unresolved but STILL balanced
+                else {                                   // unresolved but STILL balanced
+                    bSign.push_back(q);
+                    bSignWhy[q] = (parity == -2) ? "pool-cap"
+                                : (parity == -3) ? "model-check-failed"
+                                                 : "timeout";
+                }
                 std::cerr << "[BENCH] phase=parity_ml cipher=" << this->cipherName
                           << " subset=3 coord=" << q
                           << " solcount=" << solCount
@@ -518,7 +541,15 @@ void Div3SetMILP::searchDistinguisher() {
     if (this->signLabeling) {
         writeCoordSet(r, "  - sum=0 coords", sum0);
         writeCoordSet(r, "  - sum=1 coords", sum1);
-        writeCoordSet(r, "  - 'b' (sign unresolved) coords", bSign);
+        // 'b' coords carry the reason the parity was left unresolved, so a
+        // fallback is always visible in the result file and never silent.
+        r << "  - 'b' (sign unresolved) coords (" << bSign.size() << "): {";
+        bool fb = true;
+        for (int j : bSign) {
+            r << (fb ? "" : ",") << j << "(" << bSignWhy[j] << ")";
+            fb = false;
+        }
+        r << "}\n";
     }
     r << "\n";
     if (!balanced.empty())
