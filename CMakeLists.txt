@@ -22,9 +22,11 @@ INCLUDE_DIRECTORIES(/usr/include/)
 LINK_DIRECTORIES(/usr/lib)
 INCLUDE_DIRECTORIES(/usr/include/jsoncpp)
 
-# s3lab
-INCLUDE_DIRECTORIES(/opt/gurobi1202/linux64/include)
-LINK_DIRECTORIES(/opt/gurobi1202/linux64/lib)
+# Gurobi: 各机器用 -DGUROBI_HOME=/path/to/gurobiXXXX/linux64 覆盖
+# 默认值为 WSL 开发机的 12.0.2；实验室服务器为 /home/xuws/gurobi1302/linux64
+set(GUROBI_HOME "/opt/gurobi1202/linux64" CACHE PATH "Gurobi linux64 home")
+INCLUDE_DIRECTORIES(${GUROBI_HOME}/include)
+LINK_DIRECTORIES(${GUROBI_HOME}/lib)
 
 #add_subdirectory(lib)
 
@@ -91,17 +93,22 @@ ADD_EXECUTABLE(EasyBC
         lib/differential/DiffMILPcons.cpp include/differential/DiffRBMILP.h lib/differential/DiffRBMILP.cpp include/linear/LinearMILPcons.h lib/linear/LinearMILPcons.cpp include/linear/LinearSBMILP.h lib/linear/LinearSBMILP.cpp include/differential/DiffRWMILP.h lib/differential/DiffRWMILP.cpp)
 
 
-find_library(gurobi_static NAMES libgurobi_g++8.5.a
-        PATHS /opt/gurobi1202/linux64/lib)
+find_library(gurobi_static NAMES libgurobi_g++8.5.a gurobi_c++
+        PATHS ${GUROBI_HOME}/lib)
 
-find_library(gurobi_dynamic NAMES libgurobi120.so
-        PATHS /opt/gurobi1202/linux64/lib)
+# 动态库名随大版本变化（12→libgurobi120.so，13→libgurobi130.so），自动探测
+file(GLOB gurobi_dynamic
+        ${GUROBI_HOME}/lib/libgurobi[0-9][0-9][0-9].so
+        ${GUROBI_HOME}/lib/libgurobi[0-9][0-9].so)
 
 if(NOT gurobi_static)
-    message(FATAL_ERROR "Failed to find Gurobi lib")
+    message(FATAL_ERROR "Failed to find Gurobi static lib under ${GUROBI_HOME}/lib")
 endif()
-message(${gurobi_static})
-message(${gurobi_dynamic})
+if(NOT gurobi_dynamic)
+    message(FATAL_ERROR "Failed to find Gurobi shared lib (libgurobiXXX.so) under ${GUROBI_HOME}/lib")
+endif()
+message(STATUS "Gurobi static : ${gurobi_static}")
+message(STATUS "Gurobi dynamic: ${gurobi_dynamic}")
 
 
 TARGET_LINK_LIBRARIES(EasyBC ${FLEX_LIBRARIES} jsoncpp)
