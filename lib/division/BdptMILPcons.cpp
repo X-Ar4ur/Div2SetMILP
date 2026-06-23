@@ -86,3 +86,15 @@ void BdptMILPcons::bdptCrossExactOneFlipC(std::string path,
     }
     scons.close();
 }
+
+void BdptMILPcons::bdptCrossPaperC(std::string path,
+                                  const std::vector<int>& kIndices,
+                                  const std::vector<int>& lIndices) {
+    if (kIndices.empty() || lIndices.empty()) return;
+    assert(kIndices.size() == lIndices.size());
+
+    bdptCrossNotAllOneC(path, lIndices);
+    for (size_t i = 0; i < lIndices.size(); ++i) {
+        bdptCrossDominanceC(path, lIndices[i], kIndices[i]);
+    }
+}

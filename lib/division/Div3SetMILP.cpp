@@ -261,15 +261,27 @@ void Div3SetMILP::MGR() {
     std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling (Phase 4) =====" << std::endl;
     std::cout << "Cipher: " << this->cipherName
               << ", Rounds: " << this->rounds
-              << ", Active bits: " << this->activebitsSpec << std::endl;
+              << ", Active bits: " << this->activebitsSpec
+              << ", Cross: " << toString(this->crossMode)
+              << ", Solver: " << toString(this->unitSearchMode)
+              << ", Repro: " << (this->reproduction ? 1 : 0) << std::endl;
 
     preprocess(); // Load both O_k and O_l reduced inequalities.
 
-    std::string milpDir = this->pathPrefix + "milp/";
-    (void)system(("mkdir -p " + milpDir).c_str());
-
-    this->resultsPath = milpDir + "result_" + std::to_string(this->rounds)
-                        + "_" + this->activebitsSpec + "_subset3.txt";
+    if (this->reproduction) {
+        this->runDir = this->pathPrefix + "repro/subset3/"
+                       + std::to_string(this->rounds) + "_"
+                       + this->activebitsSpec + "_"
+                       + toString(this->crossMode) + "_"
+                       + toString(this->unitSearchMode) + "/";
+        (void)system(("mkdir -p " + this->runDir).c_str());
+        this->resultsPath = this->runDir + "result.txt";
+    } else {
+        this->runDir = this->pathPrefix + "milp/";
+        (void)system(("mkdir -p " + this->runDir).c_str());
+        this->resultsPath = this->runDir + "result_" + std::to_string(this->rounds)
+                            + "_" + this->activebitsSpec + "_subset3.txt";
+    }
 
     // Run Algorithm 4: build + solve the model set P = {M_1, ..., M_{r-1}} and
     // report the balanced output coordinates.
@@ -279,10 +291,97 @@ void Div3SetMILP::MGR() {
 }
 
 
-std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
-                                                  const std::vector<int>& outIdx,
-                                                  const std::set<int>& skip) {
-    std::set<int> reachable;
+BdptSolveResult Div3SetMILP::solveMtReachableCoords(
+        const std::string& lpFile,
+        const std::vector<int>& outIdx,
+        const std::set<int>& skip) {
+    // Strict reproduction needs the complete reachable-unit set of every M_t
+    // for auditable per-model comparison. Ordinary mode keeps the historical
+    // union-only skip optimization.
+    const std::set<int> noSkip;
+    const std::set<int>& effectiveSkip = this->reproduction ? noSkip : skip;
+    if (this->unitSearchMode == BdptUnitSearchMode::PerBit) {
+        return solveMtReachableCoordsPerBit(lpFile, outIdx, effectiveSkip);
+    }
+    return solveMtReachableCoordsMinPin(lpFile, outIdx, effectiveSkip);
+}
+
+
+BdptSolveResult Div3SetMILP::solveMtReachableCoordsPerBit(
+        const std::string& lpFile,
+        const std::vector<int>& outIdx,
+        const std::set<int>& skip) {
+    BdptSolveResult result;
+
+    GRBEnv env = GRBEnv(true);
+    env.set(GRB_IntParam_Threads, this->gurobiThreads);
+    env.set(GRB_IntParam_OutputFlag, 0);
+    env.start();
+    GRBModel model = GRBModel(env, lpFile);
+    model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
+    model.set(GRB_DoubleParam_NodefileStart, 0.5);
+
+    std::vector<GRBVar> outVars(outIdx.size());
+    for (int j = 0; j < (int)outIdx.size(); ++j) {
+        outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
+    }
+
+    for (int q = 0; q < (int)outVars.size(); ++q) {
+        if (skip.count(q)) continue;
+
+        for (int j = 0; j < (int)outVars.size(); ++j) {
+            const double fixed = (j == q) ? 1.0 : 0.0;
+            outVars[j].set(GRB_DoubleAttr_LB, fixed);
+            outVars[j].set(GRB_DoubleAttr_UB, fixed);
+        }
+        model.update();
+
+        auto solveStart = std::chrono::steady_clock::now();
+        model.optimize();
+        auto solveEnd = std::chrono::steady_clock::now();
+        result.solveCount++;
+        result.solverSeconds += std::chrono::duration<double>(
+            solveEnd - solveStart).count();
+
+        int status = model.get(GRB_IntAttr_Status);
+        result.lastStatus = status;
+        result.coordinateStatus[q] = status;
+        int solCount = model.get(GRB_IntAttr_SolCount);
+
+        if (status == GRB_INFEASIBLE) {
+            continue;
+        }
+        if (solCount > 0) {
+            // One incumbent is a constructive proof that e_q is reachable; an
+            // optimality proof is unnecessary for the ordinary feasibility
+            // question. Strict reproduction still records any non-OPTIMAL
+            // termination as incomplete, even when the coordinate is known
+            // reachable, so time limits can never be hidden.
+            result.reachable.insert(q);
+            if (this->reproduction && status != GRB_OPTIMAL) {
+                result.markIncomplete(
+                    status, "non-optimal-per-bit-status-at-coordinate-" +
+                            std::to_string(q));
+                break;
+            }
+            continue;
+        }
+
+        result.markIncomplete(
+            status, "unsettled-per-bit-feasibility-at-coordinate-" +
+                    std::to_string(q));
+        break;
+    }
+
+    return result;
+}
+
+
+BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
+        const std::string& lpFile,
+        const std::vector<int>& outIdx,
+        const std::set<int>& skip) {
+    BdptSolveResult result;
 
     GRBEnv env = GRBEnv(true);
     env.set(GRB_IntParam_Threads, this->gurobiThreads);
@@ -328,8 +427,15 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
     model.update();
 
     while (true) {
+        auto solveStart = std::chrono::steady_clock::now();
         model.optimize();
+        auto solveEnd = std::chrono::steady_clock::now();
+        result.solveCount++;
+        result.solverSeconds += std::chrono::duration<double>(
+            solveEnd - solveStart).count();
         int status = model.get(GRB_IntAttr_Status);
+        result.lastStatus = status;
+        result.iterationStatuses.push_back(status);
         int solCount = model.get(GRB_IntAttr_SolCount);
         // objVal >= 0, so round-to-nearest is (int)(v + 0.5); -1 marks "no incumbent".
         int objR = (solCount > 0) ? (int)(model.get(GRB_DoubleAttr_ObjVal) + 0.5) : -1;
@@ -342,8 +448,19 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
             for (int j = 0; j < (int)outVars.size(); ++j) {
                 if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) { setIdx = j; break; }
             }
-            if (setIdx < 0) break;            // defensive; weight 1 must set one bit
-            reachable.insert(setIdx);         // e_setIdx reachable -> coord unknown
+            if (setIdx < 0) {
+                result.markIncomplete(status, "weight-one-solution-without-set-output");
+                break;
+            }
+            result.reachable.insert(setIdx);  // e_setIdx reachable -> coord unknown
+            if (this->reproduction &&
+                status != GRB_OPTIMAL &&
+                status != GRB_USER_OBJ_LIMIT) {
+                result.markIncomplete(
+                    status, "non-proof-min-pin-status-after-unit-coordinate-" +
+                            std::to_string(setIdx));
+                break;
+            }
             outVars[setIdx].set(GRB_DoubleAttr_UB, 0.0);  // pin and look for the next
             model.update();
             continue;
@@ -355,19 +472,13 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
             break;
         }
 
-        // Unsettled (TIME_LIMIT / other) with no trustworthy weight-1 incumbent:
-        // we cannot prove the remaining free coords balanced, so mark them all
-        // unknown (soundness over recall -- never claim balanced on an unsettled
-        // solve), matching the old per-coordinate fallback.
-        for (int j = 0; j < (int)outVars.size(); ++j) {
-            if (skip.count(j) || reachable.count(j)) continue;
-            reachable.insert(j);
-        }
+        // Unsettled (TIME_LIMIT / other) with no terminal proof.
         std::cout << "WARNING: Gurobi status " << status << " (no proof) for "
-                  << lpFile << "; remaining coords marked unknown." << std::endl;
+                  << lpFile << "; model result is incomplete." << std::endl;
+        result.markIncomplete(status, "unsettled-min-pin-terminal-proof");
         break;
     }
-    return reachable;
+    return result;
 }
 
 
@@ -452,8 +563,7 @@ int Div3SetMILP::classifyMLParity(const std::string& mlLpFile,
 void Div3SetMILP::searchDistinguisher() {
     auto _bench_t0 = std::chrono::steady_clock::now();
 
-    std::string milpDir = this->pathPrefix + "milp/";
-    std::string base = milpDir + this->cipherName + "_" + std::to_string(this->rounds)
+    std::string base = this->runDir + this->cipherName + "_" + std::to_string(this->rounds)
                        + "_" + this->activebitsSpec + "_subset3";
 
     // Union of unknown output coordinates across the model set P.
@@ -468,15 +578,22 @@ void Div3SetMILP::searchDistinguisher() {
     // dropping it under-counts the unknown set and would over-claim balanced.)
     std::set<int> unknownCoords;
     int nModels = this->rounds - 1; // M_1 .. M_{r-1} (Remark 2: r-th ignored)
+    int modelsAttempted = 0;
+    bool modelSetComplete = true;
+    std::string incompleteReason;
 
     std::ofstream result(this->resultsPath, std::ios::trunc);
     result << "===== 3-subset BDPT integral distinguisher search =====\n";
     result << "Cipher: " << this->cipherName << ", Rounds: " << this->rounds
            << ", Active bits: " << this->activebitsSpec << "\n";
+    result << "Cross mode: " << toString(this->crossMode)
+           << ", Unit solver: " << toString(this->unitSearchMode)
+           << ", Strict reproduction: " << (this->reproduction ? 1 : 0) << "\n";
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 
     for (int tau = 1; tau <= nModels; ++tau) {
+        modelsAttempted++;
         int crossRound = tau + 1;
         std::string lpFile = base + "_Mt" + std::to_string(tau) + ".lp";
         buildMtModel(crossRound, lpFile);
@@ -486,20 +603,66 @@ void Div3SetMILP::searchDistinguisher() {
         // Pass the running unknown set as skip: a coordinate already shown
         // unknown by an earlier M_t need not be re-found here (the union is all
         // that matters); pinning it to 0 also tightens this model's minimize.
-        std::set<int> reach = solveMtReachableCoords(lpFile, outIdx, unknownCoords);
+        BdptSolveResult solveResult =
+            solveMtReachableCoords(lpFile, outIdx, unknownCoords);
+        std::set<int> reach = solveResult.reachable;
+        if (!solveResult.complete) {
+            modelSetComplete = false;
+            incompleteReason = "M_" + std::to_string(tau) + ":"
+                               + solveResult.reason;
+            if (!this->reproduction) {
+                // Conservative ordinary-mode fallback: an unproved coordinate
+                // remains unknown and can never be reported as balanced.
+                for (int q = 0; q < (int)outIdx.size(); ++q) {
+                    if (!unknownCoords.count(q) && !reach.count(q)) {
+                        reach.insert(q);
+                    }
+                }
+            }
+        }
         for (int j : reach) unknownCoords.insert(j);
 
         std::ofstream r(this->resultsPath, std::ios::app);
         r << "M_" << tau << " (cross@round " << crossRound << "): reachable unit coords = {";
         bool first = true;
         for (int j : reach) { r << (first ? "" : ",") << j; first = false; }
-        r << "}  (" << reach.size() << ")\n";
+        r << "}  (" << reach.size() << ")"
+          << " complete=" << (solveResult.complete ? 1 : 0)
+          << " solves=" << solveResult.solveCount
+          << " solver_seconds=" << solveResult.solverSeconds
+          << " status=" << solveResult.lastStatus;
+        if (!solveResult.reason.empty()) r << " reason=" << solveResult.reason;
+        if (!solveResult.coordinateStatus.empty()) {
+            r << " coord_statuses={";
+            bool firstStatus = true;
+            for (const auto& item : solveResult.coordinateStatus) {
+                r << (firstStatus ? "" : ",") << item.first << ":" << item.second;
+                firstStatus = false;
+            }
+            r << "}";
+        }
+        if (!solveResult.iterationStatuses.empty()) {
+            r << " iteration_statuses={";
+            for (size_t i = 0; i < solveResult.iterationStatuses.size(); ++i) {
+                r << (i == 0 ? "" : ",") << solveResult.iterationStatuses[i];
+            }
+            r << "}";
+        }
+        r << "\n";
         r.close();
 
         std::cerr << "[BENCH] phase=solve_mt cipher=" << this->cipherName
                   << " subset=3 model=Mt" << tau
                   << " cross_round=" << crossRound
-                  << " n_reachable=" << reach.size() << std::endl;
+                  << " n_reachable=" << reach.size()
+                  << " complete=" << (solveResult.complete ? 1 : 0)
+                  << " solve_count=" << solveResult.solveCount
+                  << " solver_seconds=" << solveResult.solverSeconds
+                  << " status=" << solveResult.lastStatus << std::endl;
+
+        if (this->reproduction && !solveResult.complete) {
+            break;
+        }
     }
 
     // ---- Algorithm 4, second half (Stopping Rule 2). Every DETERMINED output
@@ -519,7 +682,8 @@ void Div3SetMILP::searchDistinguisher() {
     std::vector<int> sum1;     // parity odd,  resolved -> sum 1
     std::vector<int> bSign;    // sign unresolved (disabled / fallback) -> 'b'
     std::map<int, std::string> bSignWhy;   // coord -> fallback reason
-    if (!balanced.empty()) {
+    bool parityComplete = true;
+    if (!balanced.empty() && (!this->reproduction || modelSetComplete)) {
         if (this->signLabeling) {
             std::string mlFile = base + "_ML.lp";
             buildChainModel(CHAIN_L, mlFile);        // M_L; sets outputBitIndices = L_r
@@ -531,18 +695,27 @@ void Div3SetMILP::searchDistinguisher() {
                 else if (parity == 1) sum1.push_back(q);
                 else {                                   // unresolved but STILL balanced
                     bSign.push_back(q);
+                    parityComplete = false;
                     bSignWhy[q] = (parity == -2) ? "pool-cap"
                                 : (parity == -3) ? "model-check-failed"
                                                  : "timeout";
+                    if (this->reproduction && incompleteReason.empty()) {
+                        incompleteReason = "M_L:" + bSignWhy[q]
+                                           + "-at-coordinate-" + std::to_string(q);
+                    }
                 }
                 std::cerr << "[BENCH] phase=parity_ml cipher=" << this->cipherName
                           << " subset=3 coord=" << q
                           << " solcount=" << solCount
                           << " parity=" << parity << std::endl;
+                if (this->reproduction && parity < 0) break;
             }
         } else {
             bSign = balanced;   // sign step skipped: report every balanced bit as 'b'
+            parityComplete = false;
         }
+    } else if (this->reproduction && !modelSetComplete) {
+        parityComplete = false;
     }
 
     auto writeCoordSet = [](std::ofstream& os, const char* label,
@@ -552,6 +725,10 @@ void Div3SetMILP::searchDistinguisher() {
         for (int j : v) { os << (first ? "" : ",") << j; first = false; }
         os << "}\n";
     };
+
+    const bool strictIncomplete =
+        this->reproduction &&
+        (!modelSetComplete || modelsAttempted != nModels || !parityComplete);
 
     std::ofstream r(this->resultsPath, std::ios::app);
     {
@@ -575,7 +752,14 @@ void Div3SetMILP::searchDistinguisher() {
         r << "}\n";
     }
     r << "\n";
-    if (!balanced.empty())
+    if (this->reproduction) {
+        r << "Reproduction completeness: "
+          << (strictIncomplete ? "INCOMPLETE" : "COMPLETE") << "\n";
+        if (strictIncomplete) r << "Incomplete reason: " << incompleteReason << "\n";
+    }
+    if (strictIncomplete)
+        r << "Integral distinguisher result withheld: reproduction is incomplete\n";
+    else if (!balanced.empty())
         r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits)\n";
     else
         r << "Integral Distinguisher does NOT exist\n";
@@ -590,7 +774,9 @@ void Div3SetMILP::searchDistinguisher() {
                   << " sum=1, " << bSign.size() << " 'b']";
     std::cout << ", " << unknownCoords.size() << " unknown (block size "
               << this->blockSize << ")" << std::endl;
-    if (!balanced.empty())
+    if (strictIncomplete)
+        std::cout << "*** Reproduction INCOMPLETE: " << incompleteReason << " ***" << std::endl;
+    else if (!balanced.empty())
         std::cout << "*** Integral Distinguisher Found! (" << balanced.size()
                   << " balanced bits) ***" << std::endl;
     else
@@ -603,6 +789,13 @@ void Div3SetMILP::searchDistinguisher() {
               << " activebits=" << this->activebitsSpec
               << " elapsed_ms=" << _bench_ms
               << " n_models=" << nModels
+              << " n_models_attempted=" << modelsAttempted
+              << " model_set_complete=" << (modelSetComplete ? 1 : 0)
+              << " parity_complete=" << (parityComplete ? 1 : 0)
+              << " repro=" << (this->reproduction ? 1 : 0)
+              << " repro_incomplete=" << (strictIncomplete ? 1 : 0)
+              << " cross=" << toString(this->crossMode)
+              << " solver=" << toString(this->unitSearchMode)
               << " n_balanced=" << balanced.size()
               << " n_sum0=" << sum0.size()
               << " n_sum1=" << sum1.size()
@@ -973,7 +1166,8 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             functionCallFlag = false;
     }
 
-    // Cross layer constraints use bdptCrossExactOneFlipC selector encoding.
+    // Cross mode is explicit: paper uses only Proposition 1's not-all-one plus
+    // dominance relations; exact preserves EasyBC's one-flip selector model.
     // Cross layer constraints, once per Key-XOR layer of the cross round, over
     // the s key-covered bits collected during this round's Key-XORs:
     //   (a) ell_0^t + ... + ell_{s-1}^t <= s - 1                (not all-ones)
@@ -981,8 +1175,14 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
     // The weight increment is what keeps K_t* tight (without it, (a)+(b) admit
     // any superset of L_t and every output bit saturates).
     if (this->crossRound >= 1 && this->currentRound == this->crossRound && !this->crossLBits.empty()) {
-        BdptMILPcons::bdptCrossExactOneFlipC(this->modelPath, this->crossKBits,
-                                             this->crossLBits, this->dCounter);
+        if (this->crossMode == BdptCrossMode::Paper) {
+            BdptMILPcons::bdptCrossPaperC(
+                this->modelPath, this->crossKBits, this->crossLBits);
+        } else {
+            BdptMILPcons::bdptCrossExactOneFlipC(
+                this->modelPath, this->crossKBits,
+                this->crossLBits, this->dCounter);
+        }
         this->crossLBits.clear();
         this->crossKBits.clear();
     }

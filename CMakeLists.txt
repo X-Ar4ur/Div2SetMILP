@@ -59,6 +59,8 @@ ADD_EXECUTABLE(EasyBC
         include/differential/DiffMILPcons.h
         include/division/Div2SetMILP.h
         include/division/Div3SetMILP.h
+        include/division/BdptConfig.h
+        include/division/BdptSolveResult.h
         include/division/DivMILPcons.h
         include/division/BdptMILPcons.h
         include/sbox/SboxModel.h
@@ -86,6 +88,7 @@ ADD_EXECUTABLE(EasyBC
         lib/util/utilities.cpp
         lib/division/DivMILPcons.cpp
         lib/division/BdptMILPcons.cpp
+        lib/division/BdptConfig.cpp
         lib/division/Div2SetMILP.cpp
         lib/division/Div3SetMILP.cpp
         lib/differential/DiffSBMILP.cpp

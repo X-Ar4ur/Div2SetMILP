@@ -23,7 +23,6 @@
 #ifndef EASYBC_DIV3SETMILP_H
 #define EASYBC_DIV3SETMILP_H
 
-#include "ProcedureH.h"
 #include <utility>
 #include <cmath>
 #include <map>
@@ -33,10 +32,13 @@
 #include <sstream>
 #include <ctime>
 #include <algorithm>
+#include "ProcedureH.h"
 #include "Transformer.h"
 #include "Interpreter.h"
 #include "DivMILPcons.h"
 #include "BdptMILPcons.h"
+#include "BdptConfig.h"
+#include "BdptSolveResult.h"
 
 #include "gurobi_c++.h"
 
@@ -69,6 +71,9 @@ private:
     // way. `sign 0` on the command line skips the M_L parity stage entirely
     // (fast NBB-only mode; every determined bit is reported as 'b').
     bool signLabeling = true;
+    bool reproduction = false;
+    BdptCrossMode crossMode = BdptCrossMode::Exact;
+    BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::MinPin;
 
     // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by
     // several operations, e.g. SIMON/Simeck where l_input feeds p1/p2/p3). The
@@ -80,6 +85,7 @@ private:
     bool lazyCopyEnabled = false;
 
     std::string pathPrefix;
+    std::string runDir;
     std::string modelPath;
     std::string resultsPath;
 
@@ -158,15 +164,18 @@ private:
     // (K-chain) to K_r*. Objective Minimize sum k_i^r*. Resets state.
     void buildMtModel(int t, const std::string& modelFile);
 
-    // Algorithm 4 (unknown test): load model M_t from lpFile and return every
-    // output COORDINATE q for which e_q is a feasible K_r* (a reachable unit
-    // vector => q unknown). For each q it FIXES the full output to e_q and tests
-    // feasibility (paper Stopping Rule 2), which prunes the loose L-chain hard.
-    // `outIdx[j]` = MILP var of output coordinate j; `skip` lists coordinates
-    // already known unknown from an earlier M_t (not re-tested).
-    std::set<int> solveMtReachableCoords(const std::string& lpFile,
-                                         const std::vector<int>& outIdx,
-                                         const std::set<int>& skip);
+    // Algorithm 4 unknown test. The dispatcher selects either per-coordinate
+    // feasibility or minimize-and-pin. Both return structured completeness,
+    // status and timing data; `skip` contains coordinates already known unknown.
+    BdptSolveResult solveMtReachableCoords(const std::string& lpFile,
+                                           const std::vector<int>& outIdx,
+                                           const std::set<int>& skip);
+    BdptSolveResult solveMtReachableCoordsPerBit(const std::string& lpFile,
+                                                 const std::vector<int>& outIdx,
+                                                 const std::set<int>& skip);
+    BdptSolveResult solveMtReachableCoordsMinPin(const std::string& lpFile,
+                                                 const std::vector<int>& outIdx,
+                                                 const std::set<int>& skip);
 
     // Algorithm 4 (parity test): count the r-round pure-L trails of M_L that
     // reach ell^r = e_coord (fix outIdx[coord]=1, all other outputs=0) and return
@@ -198,6 +207,9 @@ public:
     void setGurobiTimer(int timer) { this->gurobiTimer = timer; }
     void setGurobiThreads(int threads) { this->gurobiThreads = threads; }
     void setSignLabeling(bool s) { this->signLabeling = s; }
+    void setReproduction(bool enabled) { this->reproduction = enabled; }
+    void setCrossMode(BdptCrossMode mode) { this->crossMode = mode; }
+    void setUnitSearchMode(BdptUnitSearchMode mode) { this->unitSearchMode = mode; }
 
     void MGR();
 

@@ -65,6 +65,15 @@ namespace BdptMILPcons {
                                 const std::vector<int>& lIndices,
                                 int& dCounter);
 
+    // Paper Algorithm 3 / Proposition 1 baseline. This deliberately emits only
+    // the two relations stated in the paper:
+    //   * L is not the all-one vector over the key-covered positions;
+    //   * K* dominates L coordinate-wise.
+    // It does not introduce selector variables or the stronger weight equation.
+    void bdptCrossPaperC(std::string path,
+                         const std::vector<int>& kIndices,
+                         const std::vector<int>& lIndices);
+
 }
 
 #endif //EASYBC_BDPTMILPCONS_H

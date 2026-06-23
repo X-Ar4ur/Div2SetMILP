@@ -14,6 +14,7 @@
 #include "DivTrailsModel.h"
 #include "division/Div2SetMILP.h"
 #include "division/Div3SetMILP.h"
+#include "division/BdptConfig.h"
 
 
 extern int yyparse();
@@ -310,8 +311,31 @@ void MILPMGR(std::vector<std::string> params) {
 
 void DivTrailsMGR(std::vector<std::string> params, int subset) {
     if (params.empty()) {
-        std::cout << "Usage: ./EasyBC -div CIPHER [reductionMethod] [rounds] [activebits]" << std::endl;
+        std::cout << "Usage: ./EasyBC " << (subset == 3 ? "-div3" : "-div")
+                  << " CIPHER [reductionMethod] [rounds] [activebits]";
+        if (subset == 3) {
+            std::cout << " [cross paper|exact] [solver per-bit|min-pin]"
+                         " [sign 0|1] [repro 0|1] [timer seconds] [threads n]";
+        }
+        std::cout << std::endl;
         return;
+    }
+
+    BdptRunConfig bdptConfig;
+    if (subset == 3) {
+        std::vector<std::string> optionalArgs;
+        if (params.size() > 4) {
+            optionalArgs.assign(params.begin() + 4, params.end());
+        }
+        std::string configError;
+        if (!parseBdptOptionalArgs(optionalArgs, bdptConfig, configError)) {
+            std::cout << "ERROR: " << configError << "\n"
+                      << "Usage: ./EasyBC -div3 CIPHER [reductionMethod] [rounds] [activebits]"
+                         " [cross paper|exact] [solver per-bit|min-pin]"
+                         " [sign 0|1] [repro 0|1] [timer seconds] [threads n]"
+                      << std::endl;
+            return;
+        }
     }
     std::string divCipherName = params[0];
     int reductionMethod = 1;
@@ -332,7 +356,16 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
                   << " reduction=" << reductionMethod
                   << " rounds=" << _bench_rounds
                   << " activebits=" << _bench_activebits
-                  << " subset=" << subset << std::endl;
+                  << " subset=" << subset;
+        if (subset == 3) {
+            std::cerr << " cross=" << toString(bdptConfig.crossMode)
+                      << " solver=" << toString(bdptConfig.unitSearchMode)
+                      << " sign=" << (bdptConfig.signLabeling ? 1 : 0)
+                      << " repro=" << (bdptConfig.reproduction ? 1 : 0)
+                      << " timer=" << bdptConfig.timerSeconds
+                      << " threads=" << bdptConfig.threads;
+        }
+        std::cerr << std::endl;
     }
 
     // 查找对应的 .cl 文件
@@ -431,19 +464,12 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
         if (subset == 3) {
             // 3子集BDPT，还需继续完善。
             Div3SetMILP div3set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
-            for (int i = 4; i < (int)params.size() - 1; i += 2) {
-                if (params[i] == "timer") {
-                    div3set.setGurobiTimer(std::stoi(params[i + 1]));
-                } else if (params[i] == "threads") {
-                    div3set.setGurobiThreads(std::stoi(params[i + 1]));
-                } else if (params[i] == "sign") {
-                    // 0/1 sign labeling of balanced bits via M_L parity, paper
-                    // Algorithm 4 lines 14-20 (default ON). `sign 0` skips the
-                    // parity stage and reports balanced bits as 'b'. NBB is the
-                    // same either way; sign labeling never drops a balanced bit.
-                    div3set.setSignLabeling(std::stoi(params[i + 1]) != 0);
-                }
-            }
+            div3set.setGurobiTimer(bdptConfig.timerSeconds);
+            div3set.setGurobiThreads(bdptConfig.threads);
+            div3set.setSignLabeling(bdptConfig.signLabeling);
+            div3set.setReproduction(bdptConfig.reproduction);
+            div3set.setCrossMode(bdptConfig.crossMode);
+            div3set.setUnitSearchMode(bdptConfig.unitSearchMode);
             div3set.MGR();
         } else {
             Div2SetMILP div2set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
