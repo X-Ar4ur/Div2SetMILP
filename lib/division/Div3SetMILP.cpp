@@ -291,58 +291,81 @@ std::set<int> Div3SetMILP::solveMtReachableCoords(const std::string& lpFile,
     GRBModel model = GRBModel(env, lpFile);
     model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
     model.set(GRB_DoubleParam_NodefileStart, 0.5);
-    // Paper Algorithm 4 / Stopping Rule 2: for each output coordinate q, fix
-    // K_r* = e_q (q-th bit 1, every other output bit 0) and test FEASIBILITY of
-    // M_t. If feasible, e_q is a reachable unit vector and q is unknown.
+    // Paper Algorithm 4 / Stopping Rule 2 via ITERATIVE MINIMIZE-AND-PIN (the
+    // reference repo's SolveModel technique, algorithm3_4__Cross_propagation.py).
     //
-    // Fixing the FULL output to a unit vector is far cheaper than the old
-    // minimize-and-pin over a free output: the fixed e_q propagates backward
-    // through the K-chain, cross and L-chain and prunes the (loose) search hard,
-    // so each query is a quick SAT/UNSAT check instead of a global optimisation.
+    // We must find every output coordinate q for which the unit vector e_q is a
+    // reachable K_r*. The old code fixed K_r* = e_q for each q and ran a separate
+    // feasibility/INFEASIBILITY check -- up to n solves per model, and the (~n/2)
+    // UNREACHABLE coordinates each force Gurobi to PROVE infeasibility on the
+    // loose L-chain+K-chain model, which is the slow part of MILP. For PRESENT 9r
+    // this hangs on the middle cross rounds (see data/division/PRESENT/run_9_63*).
     //
-    // The .lp objective is kept as written (Minimize sum k_i^r*, paper
-    // Algorithm 3 line 4). With the whole output fixed to e_q it is the
-    // constant 1 on the feasible region, so the solve is a pure feasibility
-    // test either way.
-    model.set(GRB_IntParam_MIPFocus, 1);     // find a feasible point fast
-    model.set(GRB_IntParam_SolutionLimit, 1); // stop at the first feasible point
+    // Instead we minimize the K_r* weight (the .lp objective, paper Alg 3 line 4):
+    //   * an optimum of 1 is a reachable unit vector e_j  -> j unknown; pin it to
+    //     0 (UB=0) and re-solve to find the next one;
+    //   * an optimum >= 2 (or INFEASIBLE) PROVES no remaining free coordinate is
+    //     reachable as a unit vector -> the loop stops.
+    // That is ONE bound proof per model instead of one infeasibility proof per
+    // coordinate -- the dominant speed-up. BestObjStop=1 lets a weight-1 incumbent
+    // terminate the solve immediately (it is always optimal since |K_r*| >= 1 on
+    // any feasible trail), so only the terminal "optimum >= 2" solve pays a full
+    // proof.
+    model.set(GRB_DoubleParam_BestObjStop, 1.0);
 
     std::vector<GRBVar> outVars(outIdx.size());
     for (int j = 0; j < (int)outIdx.size(); ++j) {
         outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
     }
+
+    // Coordinates already known unknown from an earlier M_t need not be found
+    // again (only the union matters). Pinning them to 0 also tightens the
+    // minimize without excluding any e_j for a still-free j (e_j has every other
+    // output bit, including these, at 0 anyway).
+    for (int q : skip) {
+        if (q >= 0 && q < (int)outVars.size()) outVars[q].set(GRB_DoubleAttr_UB, 0.0);
+    }
     model.update();
 
-    for (int q = 0; q < (int)outIdx.size(); ++q) {
-        if (skip.count(q)) continue;          // already known unknown in another M_t
-
-        // Fix output = e_q.
-        for (int j = 0; j < (int)outIdx.size(); ++j) {
-            double b = (j == q) ? 1.0 : 0.0;
-            outVars[j].set(GRB_DoubleAttr_LB, b);
-            outVars[j].set(GRB_DoubleAttr_UB, b);
-        }
-        model.update();
+    while (true) {
         model.optimize();
-
         int status = model.get(GRB_IntAttr_Status);
         int solCount = model.get(GRB_IntAttr_SolCount);
-        if (solCount > 0) {
-            reachable.insert(q);              // e_q feasible -> q is unknown
-        } else if (status != GRB_INFEASIBLE) {
-            // Neither a solution nor a proof of infeasibility (e.g. TIME_LIMIT):
-            // be conservative and treat q as reachable (unknown), never claiming
-            // a bit balanced on an unsettled solve.
-            reachable.insert(q);
-            std::cout << "WARNING: Gurobi status " << status << " (no proof) for "
-                      << lpFile << " coord " << q << std::endl;
+        // objVal >= 0, so round-to-nearest is (int)(v + 0.5); -1 marks "no incumbent".
+        int objR = (solCount > 0) ? (int)(model.get(GRB_DoubleAttr_ObjVal) + 0.5) : -1;
+
+        // A weight-1 incumbent is provably optimal (no feasible trail has K_r*
+        // weight 0), so consume it regardless of solve status (OPTIMAL,
+        // USER_OBJ_LIMIT via BestObjStop, or even TIME_LIMIT) and keep going.
+        if (solCount > 0 && objR == 1) {
+            int setIdx = -1;
+            for (int j = 0; j < (int)outVars.size(); ++j) {
+                if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) { setIdx = j; break; }
+            }
+            if (setIdx < 0) break;            // defensive; weight 1 must set one bit
+            reachable.insert(setIdx);         // e_setIdx reachable -> coord unknown
+            outVars[setIdx].set(GRB_DoubleAttr_UB, 0.0);  // pin and look for the next
+            model.update();
+            continue;
         }
 
-        // Release the bounds for the next coordinate.
-        for (int j = 0; j < (int)outIdx.size(); ++j) {
-            outVars[j].set(GRB_DoubleAttr_LB, 0.0);
-            outVars[j].set(GRB_DoubleAttr_UB, 1.0);
+        if (status == GRB_OPTIMAL || status == GRB_INFEASIBLE) {
+            // Proven optimum >= 2 (or no feasible / all-zero output): no remaining
+            // free coordinate is reachable as a unit vector -> they are determined.
+            break;
         }
+
+        // Unsettled (TIME_LIMIT / other) with no trustworthy weight-1 incumbent:
+        // we cannot prove the remaining free coords balanced, so mark them all
+        // unknown (soundness over recall -- never claim balanced on an unsettled
+        // solve), matching the old per-coordinate fallback.
+        for (int j = 0; j < (int)outVars.size(); ++j) {
+            if (skip.count(j) || reachable.count(j)) continue;
+            reachable.insert(j);
+        }
+        std::cout << "WARNING: Gurobi status " << status << " (no proof) for "
+                  << lpFile << "; remaining coords marked unknown." << std::endl;
+        break;
     }
     return reachable;
 }
@@ -461,8 +484,8 @@ void Div3SetMILP::searchDistinguisher() {
         std::vector<int> outIdx = this->outputBitIndices;
 
         // Pass the running unknown set as skip: a coordinate already shown
-        // unknown by an earlier M_t need not be re-tested here (the union is all
-        // that matters), which prunes the per-q feasibility loop substantially.
+        // unknown by an earlier M_t need not be re-found here (the union is all
+        // that matters); pinning it to 0 also tightens this model's minimize.
         std::set<int> reach = solveMtReachableCoords(lpFile, outIdx, unknownCoords);
         for (int j : reach) unknownCoords.insert(j);
 
