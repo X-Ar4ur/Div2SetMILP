@@ -51,3 +51,14 @@ doc/
 
 # Logs
 *.log
+
+.codegraph
+
+docs/
+refer/
+scripts/
+tests/
+tmp/
+
+*.png
+CLAUDE.md
