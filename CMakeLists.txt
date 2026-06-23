@@ -20,13 +20,12 @@ INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/z3/include)
 
 INCLUDE_DIRECTORIES(/usr/include/)
 LINK_DIRECTORIES(/usr/lib)
-INCLUDE_DIRECTORIES(/usr/include/jsoncpp)
+LINK_DIRECTORIES(/home/xuws/.local/lib)   # 若上一步装到了 lib64，就写 lib64
+INCLUDE_DIRECTORIES(/home/xuws/.local/include)
 
-# Gurobi: 各机器用 -DGUROBI_HOME=/path/to/gurobiXXXX/linux64 覆盖
-# 默认值为 WSL 开发机的 12.0.2；实验室服务器为 /home/xuws/gurobi1302/linux64
-set(GUROBI_HOME "/opt/gurobi1202/linux64" CACHE PATH "Gurobi linux64 home")
-INCLUDE_DIRECTORIES(${GUROBI_HOME}/include)
-LINK_DIRECTORIES(${GUROBI_HOME}/lib)
+# s3lab
+INCLUDE_DIRECTORIES(/home/xuws/gurobi1302/linux64/include)
+LINK_DIRECTORIES(/home/xuws/gurobi1302/linux64/lib)
 
 #add_subdirectory(lib)
 
@@ -59,8 +58,6 @@ ADD_EXECUTABLE(EasyBC
         include/differential/DiffMILPcons.h
         include/division/Div2SetMILP.h
         include/division/Div3SetMILP.h
-        include/division/BdptConfig.h
-        include/division/BdptSolveResult.h
         include/division/DivMILPcons.h
         include/division/BdptMILPcons.h
         include/sbox/SboxModel.h
@@ -88,7 +85,6 @@ ADD_EXECUTABLE(EasyBC
         lib/util/utilities.cpp
         lib/division/DivMILPcons.cpp
         lib/division/BdptMILPcons.cpp
-        lib/division/BdptConfig.cpp
         lib/division/Div2SetMILP.cpp
         lib/division/Div3SetMILP.cpp
         lib/differential/DiffSBMILP.cpp
@@ -97,12 +93,12 @@ ADD_EXECUTABLE(EasyBC
 
 
 find_library(gurobi_static NAMES libgurobi_g++8.5.a gurobi_c++
-        PATHS ${GUROBI_HOME}/lib)
+        PATHS /home/xuws/gurobi1302/linux64/lib)
 
 # 动态库名随大版本变化（12→libgurobi120.so，13→libgurobi130.so），自动探测
 file(GLOB gurobi_dynamic
-        ${GUROBI_HOME}/lib/libgurobi[0-9][0-9][0-9].so
-        ${GUROBI_HOME}/lib/libgurobi[0-9][0-9].so)
+        /home/xuws/gurobi1302/linux64/lib/libgurobi[0-9][0-9][0-9].so
+        /home/xuws/gurobi1302/linux64/lib/libgurobi[0-9][0-9].so)
 
 if(NOT gurobi_static)
     message(FATAL_ERROR "Failed to find Gurobi static lib under ${GUROBI_HOME}/lib")
