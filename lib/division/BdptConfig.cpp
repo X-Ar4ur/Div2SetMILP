@@ -16,18 +16,6 @@ bool parsePositiveInt(const std::string& text, int& value) {
     }
 }
 
-bool parseBoolean(const std::string& text, bool& value) {
-    if (text == "0") {
-        value = false;
-        return true;
-    }
-    if (text == "1") {
-        value = true;
-        return true;
-    }
-    return false;
-}
-
 } // namespace
 
 bool parseBdptOptionalArgs(const std::vector<std::string>& args,
@@ -42,31 +30,7 @@ bool parseBdptOptionalArgs(const std::vector<std::string>& args,
         const std::string& key = args[i];
         const std::string& value = args[i + 1];
 
-        if (key == "cross") {
-            if (value == "paper") config.crossMode = BdptCrossMode::Paper;
-            else if (value == "exact") config.crossMode = BdptCrossMode::Exact;
-            else {
-                error = "invalid cross mode '" + value + "' (expected paper or exact)";
-                return false;
-            }
-        } else if (key == "solver") {
-            if (value == "per-bit") config.unitSearchMode = BdptUnitSearchMode::PerBit;
-            else if (value == "min-pin") config.unitSearchMode = BdptUnitSearchMode::MinPin;
-            else {
-                error = "invalid solver mode '" + value + "' (expected per-bit or min-pin)";
-                return false;
-            }
-        } else if (key == "sign") {
-            if (!parseBoolean(value, config.signLabeling)) {
-                error = "invalid sign value '" + value + "' (expected 0 or 1)";
-                return false;
-            }
-        } else if (key == "repro") {
-            if (!parseBoolean(value, config.reproduction)) {
-                error = "invalid repro value '" + value + "' (expected 0 or 1)";
-                return false;
-            }
-        } else if (key == "timer") {
+        if (key == "timer") {
             if (!parsePositiveInt(value, config.timerSeconds)) {
                 error = "invalid timer value '" + value + "' (expected a positive integer)";
                 return false;
@@ -76,15 +40,15 @@ bool parseBdptOptionalArgs(const std::vector<std::string>& args,
                 error = "invalid threads value '" + value + "' (expected a positive integer)";
                 return false;
             }
+        } else if (key == "cross" || key == "solver" ||
+                   key == "sign" || key == "repro") {
+            error = "'" + key + "' is not a production option for -div3; "
+                    "the 3-subset backend uses paper/min-pin/NBB-only by default";
+            return false;
         } else {
             error = "unknown -div3 option '" + key + "'";
             return false;
         }
-    }
-
-    if (config.reproduction && !config.signLabeling) {
-        error = "repro 1 requires sign 1 for the paper parity check";
-        return false;
     }
 
     error.clear();

@@ -258,13 +258,13 @@ void Div3SetMILP::preprocess() {
 
 
 void Div3SetMILP::MGR() {
-    std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling (Phase 4) =====" << std::endl;
+    std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling =====" << std::endl;
     std::cout << "Cipher: " << this->cipherName
               << ", Rounds: " << this->rounds
               << ", Active bits: " << this->activebitsSpec
               << ", Cross: " << toString(this->crossMode)
               << ", Solver: " << toString(this->unitSearchMode)
-              << ", Repro: " << (this->reproduction ? 1 : 0) << std::endl;
+              << ", Output: NBB-only" << std::endl;
 
     preprocess(); // Load both O_k and O_l reduced inequalities.
 
@@ -588,7 +588,7 @@ void Div3SetMILP::searchDistinguisher() {
            << ", Active bits: " << this->activebitsSpec << "\n";
     result << "Cross mode: " << toString(this->crossMode)
            << ", Unit solver: " << toString(this->unitSearchMode)
-           << ", Strict reproduction: " << (this->reproduction ? 1 : 0) << "\n";
+           << ", Output: NBB-only\n";
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 

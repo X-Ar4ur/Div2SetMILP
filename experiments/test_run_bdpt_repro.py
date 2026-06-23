@@ -16,7 +16,7 @@ spec.loader.exec_module(run_bdpt_repro)
 
 
 class BdptRunnerTests(unittest.TestCase):
-    def test_baseline_command_is_paper_per_bit_strict(self):
+    def test_production_command_uses_default_div3_backend(self):
         binary = Path("C:/srv/easybc/build/EasyBC")
         command = run_bdpt_repro.build_command(
             binary=binary,
@@ -24,8 +24,6 @@ class BdptRunnerTests(unittest.TestCase):
             reduction=2,
             rounds=9,
             activebits="63",
-            cross="paper",
-            solver="per-bit",
             timer=86400,
             threads=8,
         )
@@ -38,29 +36,10 @@ class BdptRunnerTests(unittest.TestCase):
                 "2",
                 "9",
                 "63",
-                "cross",
-                "paper",
-                "solver",
-                "per-bit",
-                "sign",
-                "1",
-                "repro",
-                "1",
                 "timer",
                 "86400",
                 "threads",
                 "8",
-            ],
-        )
-
-    def test_matrix_contains_all_four_orthogonal_combinations(self):
-        self.assertEqual(
-            run_bdpt_repro.MATRIX,
-            [
-                ("paper", "per-bit"),
-                ("paper", "min-pin"),
-                ("exact", "per-bit"),
-                ("exact", "min-pin"),
             ],
         )
 
@@ -71,8 +50,6 @@ class BdptRunnerTests(unittest.TestCase):
             cipher="PRESENT",
             rounds=9,
             activebits="63",
-            cross="paper",
-            solver="per-bit",
         )
         self.assertEqual(
             path,
@@ -80,34 +57,8 @@ class BdptRunnerTests(unittest.TestCase):
             / "data"
             / "division"
             / "PRESENT"
-            / "repro"
-            / "subset3"
-            / "9_63_paper_per-bit"
-            / "result.txt",
-        )
-
-    def test_matrix_diff_compares_each_mt_against_paper_per_bit(self):
-        diffs = run_bdpt_repro.compute_matrix_diffs(
-            [
-                {
-                    "cross": "paper",
-                    "solver": "per-bit",
-                    "mt_reachable": {"M_1": [1, 2], "M_2": []},
-                },
-                {
-                    "cross": "paper",
-                    "solver": "min-pin",
-                    "mt_reachable": {"M_1": [1, 3], "M_2": []},
-                },
-            ]
-        )
-        self.assertEqual(
-            diffs["paper/min-pin"]["M_1"],
-            {"missing_vs_baseline": [2], "extra_vs_baseline": [3]},
-        )
-        self.assertEqual(
-            diffs["paper/min-pin"]["M_2"],
-            {"missing_vs_baseline": [], "extra_vs_baseline": []},
+            / "milp"
+            / "result_9_63_subset3.txt",
         )
 
     def test_lp_fingerprint_is_canonical_and_counts_model_size(self):
@@ -136,23 +87,17 @@ class BdptRunnerTests(unittest.TestCase):
             self.assertEqual(fingerprint["nonzero_terms"], 4)
             self.assertEqual(len(fingerprint["sha256"]), 64)
 
-    def test_matrix_mismatch_is_a_result_but_incomplete_is_a_failure(self):
+    def test_mismatch_or_incomplete_is_a_failure(self):
         self.assertEqual(
-            run_bdpt_repro.exit_code_for_reports(
-                "matrix", [{"status": "PASS"}, {"status": "MISMATCH"}]
-            ),
+            run_bdpt_repro.exit_code_for_reports([{"status": "PASS"}]),
             0,
         )
         self.assertEqual(
-            run_bdpt_repro.exit_code_for_reports(
-                "matrix", [{"status": "PASS"}, {"status": "INCOMPLETE"}]
-            ),
+            run_bdpt_repro.exit_code_for_reports([{"status": "MISMATCH"}]),
             1,
         )
         self.assertEqual(
-            run_bdpt_repro.exit_code_for_reports(
-                "baseline", [{"status": "MISMATCH"}]
-            ),
+            run_bdpt_repro.exit_code_for_reports([{"status": "INCOMPLETE"}]),
             1,
         )
 
@@ -174,8 +119,6 @@ class BdptRunnerTests(unittest.TestCase):
                 reduction=2,
                 rounds=9,
                 activebits="63",
-                cross="paper",
-                solver="per-bit",
                 timer=1,
                 threads=1,
                 golden=Path("unused.json"),

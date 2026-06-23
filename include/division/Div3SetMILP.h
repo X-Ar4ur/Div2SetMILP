@@ -62,17 +62,13 @@ private:
     int gurobiTimer = 3600 * 24;
     int gurobiThreads = 8;
 
-    // Algorithm 4 sign labeling (Stopping Rule 2, second half). Default true,
-    // exactly as the paper's Algorithm 4 lines 14-20 prescribe: M_L is built and
-    // the parity of its solution count labels every DETERMINED bit '0' (even
-    // count) or '1' (odd count). A bit whose parity cannot be resolved (time
-    // budget / pool cap / model sanity check) stays 'b' (balanced, sign unknown)
-    // and is NEVER dropped from the balanced set -- NBB is unaffected either
-    // way. `sign 0` on the command line skips the M_L parity stage entirely
-    // (fast NBB-only mode; every determined bit is reported as 'b').
-    bool signLabeling = true;
+    // EasyBC's production -div3 path reports NBB by default. The M_L parity
+    // labeler is retained as an internal refinement hook, but it is not part of
+    // the normal automatic distinguisher search because Table-1-style results
+    // only require balanced-bit coordinates.
+    bool signLabeling = false;
     bool reproduction = false;
-    BdptCrossMode crossMode = BdptCrossMode::Exact;
+    BdptCrossMode crossMode = BdptCrossMode::Paper;
     BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::MinPin;
 
     // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by

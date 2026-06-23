@@ -15,9 +15,14 @@ enum class BdptUnitSearchMode {
 };
 
 struct BdptRunConfig {
-    BdptCrossMode crossMode = BdptCrossMode::Exact;
+    // Production defaults for EasyBC's 3-subset backend:
+    //   - Paper: Algorithm 3's safe Key-XOR cross constraints
+    //   - MinPin: enumerate reachable unit outputs efficiently
+    //   - signLabeling=false: report NBB by default; M_L parity is not part of
+    //     the normal Table-1-style distinguisher search.
+    BdptCrossMode crossMode = BdptCrossMode::Paper;
     BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::MinPin;
-    bool signLabeling = true;
+    bool signLabeling = false;
     bool reproduction = false;
     int timerSeconds = 86400;
     int threads = 8;

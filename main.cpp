@@ -314,8 +314,7 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
         std::cout << "Usage: ./EasyBC " << (subset == 3 ? "-div3" : "-div")
                   << " CIPHER [reductionMethod] [rounds] [activebits]";
         if (subset == 3) {
-            std::cout << " [cross paper|exact] [solver per-bit|min-pin]"
-                         " [sign 0|1] [repro 0|1] [timer seconds] [threads n]";
+            std::cout << " [timer seconds] [threads n]";
         }
         std::cout << std::endl;
         return;
@@ -331,8 +330,7 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
         if (!parseBdptOptionalArgs(optionalArgs, bdptConfig, configError)) {
             std::cout << "ERROR: " << configError << "\n"
                       << "Usage: ./EasyBC -div3 CIPHER [reductionMethod] [rounds] [activebits]"
-                         " [cross paper|exact] [solver per-bit|min-pin]"
-                         " [sign 0|1] [repro 0|1] [timer seconds] [threads n]"
+                         " [timer seconds] [threads n]"
                       << std::endl;
             return;
         }
@@ -360,8 +358,7 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
         if (subset == 3) {
             std::cerr << " cross=" << toString(bdptConfig.crossMode)
                       << " solver=" << toString(bdptConfig.unitSearchMode)
-                      << " sign=" << (bdptConfig.signLabeling ? 1 : 0)
-                      << " repro=" << (bdptConfig.reproduction ? 1 : 0)
+                      << " mode=nbb-only"
                       << " timer=" << bdptConfig.timerSeconds
                       << " threads=" << bdptConfig.threads;
         }

@@ -1,4 +1,4 @@
-"""Run the strict BDPT baseline or the four-combination experiment matrix."""
+"""Run EasyBC's production 3-subset BDPT command and summarize the result."""
 
 from __future__ import annotations
 
@@ -23,13 +23,6 @@ except ImportError:
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
 DEFAULT_GOLDEN = HERE / "golden" / "bdpt" / "PRESENT_R9_63.json"
-
-MATRIX = [
-    ("paper", "per-bit"),
-    ("paper", "min-pin"),
-    ("exact", "per-bit"),
-    ("exact", "min-pin"),
-]
 
 
 def extract_gurobi_version(log_text: str) -> str:
@@ -83,8 +76,6 @@ def build_command(
     reduction: int,
     rounds: int,
     activebits: str,
-    cross: str,
-    solver: str,
     timer: int,
     threads: int,
 ) -> list[str]:
@@ -95,14 +86,6 @@ def build_command(
         str(reduction),
         str(rounds),
         activebits,
-        "cross",
-        cross,
-        "solver",
-        solver,
-        "sign",
-        "1",
-        "repro",
-        "1",
         "timer",
         str(timer),
         "threads",
@@ -116,8 +99,6 @@ def result_path(
     cipher: str,
     rounds: int,
     activebits: str,
-    cross: str,
-    solver: str,
 ) -> Path:
     repo_root = binary.resolve().parent.parent
     return (
@@ -125,10 +106,8 @@ def result_path(
         / "data"
         / "division"
         / cipher
-        / "repro"
-        / "subset3"
-        / f"{rounds}_{activebits}_{cross}_{solver}"
-        / "result.txt"
+        / "milp"
+        / f"result_{rounds}_{activebits}_subset3.txt"
     )
 
 
@@ -139,8 +118,6 @@ def run_one(
     reduction: int,
     rounds: int,
     activebits: str,
-    cross: str,
-    solver: str,
     timer: int,
     threads: int,
     golden: Path,
@@ -152,8 +129,6 @@ def run_one(
         reduction=reduction,
         rounds=rounds,
         activebits=activebits,
-        cross=cross,
-        solver=solver,
         timer=timer,
         threads=threads,
     )
@@ -162,15 +137,11 @@ def run_one(
         cipher=cipher,
         rounds=rounds,
         activebits=activebits,
-        cross=cross,
-        solver=solver,
     )
     run_dir = result.parent
 
     if dry_run:
         return {
-            "cross": cross,
-            "solver": solver,
             "command": command,
             "result_path": str(result),
             "status": "DRY_RUN",
@@ -180,13 +151,11 @@ def run_one(
     if not binary.exists():
         error_report = {
             "status": "ERROR",
-            "cross": cross,
-            "solver": solver,
             "command": command,
             "result_path": str(result),
             "reason": f"EasyBC binary does not exist: {binary}",
         }
-        (run_dir / "report.json").write_text(
+        (run_dir / "production_run.json").write_text(
             json.dumps(error_report, indent=2) + "\n",
             encoding="utf-8",
         )
@@ -208,14 +177,12 @@ def run_one(
     if not result.exists():
         error_report = {
             "status": "ERROR",
-            "cross": cross,
-            "solver": solver,
             "exit_code": completed.returncode,
             "command": command,
             "result_path": str(result),
-            "reason": "EasyBC did not produce result.txt",
+            "reason": "EasyBC did not produce the production -div3 result file",
         }
-        (run_dir / "report.json").write_text(
+        (run_dir / "production_run.json").write_text(
             json.dumps(error_report, indent=2) + "\n",
             encoding="utf-8",
         )
@@ -235,8 +202,6 @@ def run_one(
         golden_path=golden,
         output_dir=run_dir,
         metadata={
-            "cross": cross,
-            "solver": solver,
             "exit_code": completed.returncode,
             "command": command,
             "result_path": str(result),
@@ -253,69 +218,22 @@ def run_one(
             "model_fingerprints": fingerprints,
         },
     )
-    (run_dir / "report.json").write_text(
+    (run_dir / "production_run.json").write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n",
         encoding="utf-8",
     )
     return report
 
 
-def compute_matrix_diffs(reports: list[dict]) -> dict:
-    if not reports:
-        return {}
-    baseline = reports[0].get("mt_reachable", {})
-    diffs = {}
-    all_models = sorted(
-        {
-            model
-            for report in reports
-            for model in report.get("mt_reachable", {})
-        }
-    )
-    for report in reports:
-        name = f"{report.get('cross', '')}/{report.get('solver', '')}"
-        model_diffs = {}
-        for model in all_models:
-            baseline_set = set(baseline.get(model, []))
-            actual_set = set(report.get("mt_reachable", {}).get(model, []))
-            model_diffs[model] = {
-                "missing_vs_baseline": sorted(baseline_set - actual_set),
-                "extra_vs_baseline": sorted(actual_set - baseline_set),
-            }
-        diffs[name] = model_diffs
-    return diffs
-
-
-def exit_code_for_reports(mode: str, reports: list[dict]) -> int:
-    if mode == "matrix":
-        accepted = {"PASS", "MISMATCH", "DRY_RUN"}
-    else:
-        accepted = {"PASS", "DRY_RUN"}
+def exit_code_for_reports(reports: list[dict]) -> int:
+    accepted = {"PASS", "DRY_RUN"}
     return 0 if all(report.get("status") in accepted for report in reports) else 1
 
 
-def write_matrix_summary(reports: list[dict], output_dir: Path) -> None:
+def write_summary(reports: list[dict], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)
-    diffs = compute_matrix_diffs(reports)
-    (output_dir / "matrix.json").write_text(
-        json.dumps(
-            {"reports": reports, "mt_diffs_vs_paper_per_bit": diffs},
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
-        encoding="utf-8",
-    )
-    fields = [
-        "cross",
-        "solver",
-        "status",
-        "complete",
-        "n_balanced",
-        "exit_code",
-        "result_path",
-    ]
-    with (output_dir / "matrix.csv").open(
+    fields = ["status", "complete", "n_balanced", "exit_code", "result_path"]
+    with (output_dir / "production_run.csv").open(
         "w", newline="", encoding="utf-8"
     ) as csv_file:
         writer = csv.DictWriter(csv_file, fieldnames=fields)
@@ -324,33 +242,22 @@ def write_matrix_summary(reports: list[dict], output_dir: Path) -> None:
             writer.writerow({field: report.get(field, "") for field in fields})
 
     rows = [
-        "# BDPT 四组合复现实验",
+        "# BDPT production run",
         "",
-        "| cross | solver | status | complete | NBB |",
-        "|---|---|---:|---:|---:|",
+        "| status | complete | NBB | result |",
+        "|---:|---:|---:|---|",
     ]
     for report in reports:
         rows.append(
-            "| {cross} | {solver} | {status} | {complete} | {n_balanced} |".format(
-                cross=report.get("cross", ""),
-                solver=report.get("solver", ""),
+            "| {status} | {complete} | {n_balanced} | {result_path} |".format(
                 status=report.get("status", ""),
                 complete=report.get("complete", ""),
                 n_balanced=report.get("n_balanced", ""),
+                result_path=report.get("result_path", ""),
             )
         )
-    rows.extend(["", "## 各 M_t 相对 paper/per-bit 的集合差异", ""])
-    for combination, model_diffs in diffs.items():
-        rows.append(f"### {combination}")
-        rows.append("")
-        for model, diff in model_diffs.items():
-            rows.append(
-                f"- {model}: missing={diff['missing_vs_baseline']}, "
-                f"extra={diff['extra_vs_baseline']}"
-            )
-        rows.append("")
     rows.append("")
-    (output_dir / "matrix.md").write_text(
+    (output_dir / "production_run.md").write_text(
         "\n".join(rows), encoding="utf-8"
     )
 
@@ -358,7 +265,6 @@ def write_matrix_summary(reports: list[dict], output_dir: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--binary", type=Path, default=ROOT / "build" / "EasyBC")
-    parser.add_argument("--mode", choices=("baseline", "matrix"), default="baseline")
     parser.add_argument("--cipher", default="PRESENT")
     parser.add_argument("--reduction", type=int, default=2)
     parser.add_argument("--rounds", type=int, default=9)
@@ -370,7 +276,6 @@ def main() -> int:
     args = parser.parse_args()
 
     binary = args.binary.resolve()
-    combinations = MATRIX if args.mode == "matrix" else [MATRIX[0]]
     reports = [
         run_one(
             binary=binary,
@@ -378,14 +283,11 @@ def main() -> int:
             reduction=args.reduction,
             rounds=args.rounds,
             activebits=args.activebits,
-            cross=cross,
-            solver=solver,
             timer=args.timer,
             threads=args.threads,
             golden=args.golden,
             dry_run=args.dry_run,
         )
-        for cross, solver in combinations
     ]
 
     summary_dir = (
@@ -393,12 +295,11 @@ def main() -> int:
         / "data"
         / "division"
         / args.cipher
-        / "repro"
-        / "subset3"
+        / "milp"
     )
-    write_matrix_summary(reports, summary_dir)
+    write_summary(reports, summary_dir)
     print(json.dumps(reports, indent=2, sort_keys=True))
-    return exit_code_for_reports(args.mode, reports)
+    return exit_code_for_reports(reports)
 
 
 if __name__ == "__main__":
