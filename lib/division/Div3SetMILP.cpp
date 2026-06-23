@@ -175,7 +175,8 @@ void Div3SetMILP::resetState() {
     this->constantTan.clear();
     this->consTanNameMxVal.clear();
     this->liveChain.clear();
-    this->crossRound = -1;
+    this->selectedCrossLayer = -1;
+    this->currentKeyXorLayer = -1;
     this->currentRound = 0;
     this->crossLBits.clear();
     this->crossKBits.clear();
@@ -566,18 +567,19 @@ void Div3SetMILP::searchDistinguisher() {
     std::string base = this->runDir + this->cipherName + "_" + std::to_string(this->rounds)
                        + "_" + this->activebitsSpec + "_subset3";
 
-    // Union of unknown output coordinates across the model set P.
-    //
-    // Round-range alignment: the .cl models each round as [head Key-XOR, S-box,
-    // P-box], so crossRound = t (cross at round t's head Key-XOR) has exactly
-    // (t-1) preceding L-rounds. The paper's model set P = {M_1, ..., M_{r-1}}
-    // uses tau = 1..r-1 L-rounds before the cross, hence crossRound t = 2..r.
-    // (t = 1 would cross on the plaintext with 0 L-rounds; with the weight-1
-    // increment its K_1* = ell ∨ e_j has weight |activebits|+1 and is dead, so
-    // it is simply outside P. Critically, t = r IS in P and must be included --
-    // dropping it under-counts the unknown set and would over-claim balanced.)
+    // Union of unknown output coordinates across the model set P. Algorithm 3
+    // constructs M_t for the former Key-XOR operations and Remark 2 ignores the
+    // final Key-XOR, so the IR-derived model set is every discovered layer except
+    // the last one.
+    this->keyXorLayers = discoverBdptKeyXorLayers(this->procedureHs, this->rounds);
+    if (this->keyXorLayers.empty()) {
+        std::cout << "ERROR: No Key-XOR layer was discovered from the IR; "
+                  << "BDPT model set P cannot be built soundly." << std::endl;
+        assert(false);
+    }
+
     std::set<int> unknownCoords;
-    int nModels = this->rounds - 1; // M_1 .. M_{r-1} (Remark 2: r-th ignored)
+    int nModels = (int)this->keyXorLayers.size() - 1;
     int modelsAttempted = 0;
     bool modelSetComplete = true;
     std::string incompleteReason;
@@ -589,14 +591,16 @@ void Div3SetMILP::searchDistinguisher() {
     result << "Cross mode: " << toString(this->crossMode)
            << ", Unit solver: " << toString(this->unitSearchMode)
            << ", Output: NBB-only\n";
+    result << "Key-XOR layers discovered from IR: " << this->keyXorLayers.size()
+           << " (last layer ignored by Remark 2)\n";
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 
     for (int tau = 1; tau <= nModels; ++tau) {
         modelsAttempted++;
-        int crossRound = tau + 1;
+        const BdptKeyXorLayer& layer = this->keyXorLayers[tau - 1];
         std::string lpFile = base + "_Mt" + std::to_string(tau) + ".lp";
-        buildMtModel(crossRound, lpFile);
+        buildMtModel(tau, layer.id, lpFile);
         // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
         std::vector<int> outIdx = this->outputBitIndices;
 
@@ -623,7 +627,8 @@ void Div3SetMILP::searchDistinguisher() {
         for (int j : reach) unknownCoords.insert(j);
 
         std::ofstream r(this->resultsPath, std::ios::app);
-        r << "M_" << tau << " (cross@round " << crossRound << "): reachable unit coords = {";
+        r << "M_" << tau << " (keyxor#" << layer.id << "@round "
+          << layer.round << "): reachable unit coords = {";
         bool first = true;
         for (int j : reach) { r << (first ? "" : ",") << j; first = false; }
         r << "}  (" << reach.size() << ")"
@@ -653,7 +658,8 @@ void Div3SetMILP::searchDistinguisher() {
 
         std::cerr << "[BENCH] phase=solve_mt cipher=" << this->cipherName
                   << " subset=3 model=Mt" << tau
-                  << " cross_round=" << crossRound
+                  << " cross_layer=" << layer.id
+                  << " cross_round=" << layer.round
                   << " n_reachable=" << reach.size()
                   << " complete=" << (solveResult.complete ? 1 : 0)
                   << " solve_count=" << solveResult.solveCount
@@ -876,7 +882,7 @@ void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) 
     auto _bench_t0 = std::chrono::steady_clock::now();
 
     resetState();
-    this->crossRound = -1;          // pure single-mode (no cross)
+    this->selectedCrossLayer = -1;  // pure single-mode (no cross)
     this->pureMode = mode;
     this->chainMode = mode;
     this->modelPath = modelFile;
@@ -902,12 +908,12 @@ void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) 
 }
 
 
-void Div3SetMILP::buildMtModel(int t, const std::string& modelFile) {
+void Div3SetMILP::buildMtModel(int modelNumber, int keyXorLayerId, const std::string& modelFile) {
     auto _bench_t0 = std::chrono::steady_clock::now();
 
     resetState();
-    this->crossRound = t;           // cross at the head Key-XOR of round t
-    this->chainMode = CHAIN_L;      // rounds before t use O_l; flipped in programGenModel
+    this->selectedCrossLayer = keyXorLayerId;
+    this->chainMode = CHAIN_L;      // switch to O_k when the selected IR layer is crossed
     this->modelPath = modelFile;
 
     std::ofstream clearFile(this->modelPath, std::ios::trunc);
@@ -915,13 +921,22 @@ void Div3SetMILP::buildMtModel(int t, const std::string& modelFile) {
 
     programGenModel();
 
-    writeLpFile("Mt" + std::to_string(t));
+    writeLpFile("Mt" + std::to_string(modelNumber));
+
+    int crossLayerRound = -1;
+    for (const auto& layer : this->keyXorLayers) {
+        if (layer.id == keyXorLayerId) {
+            crossLayerRound = layer.round;
+            break;
+        }
+    }
 
     auto _bench_t1 = std::chrono::steady_clock::now();
     long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
     std::cerr << "[BENCH] phase=build cipher=" << this->cipherName
-              << " subset=3 model=Mt" << t
-              << " cross_round=" << t
+              << " subset=3 model=Mt" << modelNumber
+              << " cross_layer=" << keyXorLayerId
+              << " cross_round=" << crossLayerRound
               << " rounds=" << this->rounds
               << " activebits=" << this->activebitsSpec
               << " elapsed_ms=" << _bench_ms
@@ -952,15 +967,12 @@ void Div3SetMILP::programGenModel() {
                         tempSizeCounter = 0;
 
                         // Round bookkeeping for Key-XOR cross propagation.
-                        // currentRound is 1-based. In an M_t build (crossRound
-                        // = t), rounds [1, t) use O_l and rounds [t, r] use O_k;
-                        // the head Key-XOR of round t is the cross. In a pure
-                        // build (crossRound == -1) the fixed pureMode is used.
+                        // Pure builds use the fixed pureMode. M_t builds start
+                        // in L-chain mode and switch to K-chain exactly when
+                        // roundFunctionGenModel emits the selected IR Key-XOR
+                        // layer.
                         this->currentRound = ++processed;
-                        if (this->crossRound >= 1) {
-                            this->chainMode = (this->currentRound < this->crossRound)
-                                              ? CHAIN_L : CHAIN_K;
-                        } else {
+                        if (this->selectedCrossLayer < 0) {
                             this->chainMode = this->pureMode;
                         }
 
@@ -1011,9 +1023,6 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
     this->consTanNameMxVal[procedureH->getParameters().at(0).at(0)->getNodeName()] = this->rndParamR;
     this->constantTan.push_back(procedureH->getParameters().at(0).at(0)->getNodeName());
 
-    std::string keyId = procedureH->getParameters().at(1).at(0)->getNodeName().substr(
-            0, procedureH->getParameters().at(1).at(0)->getNodeName().find("0"));
-
     if (!this->rtnIdxSave.empty()) {
         for (int i = 0; i < (int)this->rtnIdxSave.size(); ++i)
             this->tanNameMxIndex[procedureH->getParameters().at(2).at(i)->getNodeName()] = this->rtnIdxSave[i];
@@ -1027,34 +1036,34 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
     }
 
     bool functionCallFlag;
+    bool previousWasKeyXor = false;
     for (int i = 0; i < (int)procedureH->getBlock().size(); ++i) {
         functionCallFlag = false;
+        bool currentNodeIsKeyXor = false;
         ThreeAddressNodePtr ele = procedureH->getBlock().at(i);
 
         if (ele->getOp() == ASTNode::XOR) {
-            bool leftKey = ele->getLhs()->getNodeName().find(keyId) != std::string::npos;
-            bool rightKey = ele->getRhs()->getNodeName().find(keyId) != std::string::npos;
-            if (leftKey or rightKey) {
-                // Key-XOR. In an M_t build, the head Key-XOR of round t is the
-                // BDPT cross (Algorithm 3): n_input_i = input_i ^ key_i, where
-                // the non-key operand is the L bit ell_i^t. Allocate k_i^t* (a
-                // fresh K* variable), collect the pair for the selector cross
-                // layer, and bind the result to k_i so the round's S-box reads
-                // K_t*. Every other Key-XOR is ignored
-                // (skipped), matching Div2SetMILP and Algorithm 3.
-                if (this->crossRound >= 1 && this->currentRound == this->crossRound) {
-                    ThreeAddressNodePtr lNode = leftKey ? ele->getRhs() : ele->getLhs();
-                    int lIdx = 0;
-                    auto it = this->tanNameMxIndex.find(lNode->getNodeName());
-                    if (it != this->tanNameMxIndex.end()) lIdx = it->second;
-                    else assert(false);  // L bit must already be bound (round input)
+            const BdptKeyXorMatch keyXor = matchBdptKeyXorNode(ele, procedureH);
+            if (keyXor.isKeyXor) {
+                currentNodeIsKeyXor = true;
+                if (!previousWasKeyXor) this->currentKeyXorLayer++;
+
+                ThreeAddressNodePtr dataNode = keyXor.leftIsKey ? ele->getRhs() : ele->getLhs();
+                auto it = this->tanNameMxIndex.find(dataNode->getNodeName());
+                if (it == this->tanNameMxIndex.end()) assert(false);
+
+                if (this->selectedCrossLayer >= 0 &&
+                    this->currentKeyXorLayer == this->selectedCrossLayer) {
+                    int lIdx = it->second;
                     int kIdx = this->xCounter++;
                     this->crossLBits.push_back(lIdx);
                     this->crossKBits.push_back(kIdx);
                     this->tanNameMxIndex[ele->getNodeName()] = kIdx;
-                    functionCallFlag = true;
+                    this->chainMode = CHAIN_K;
+                } else {
+                    this->tanNameMxIndex[ele->getNodeName()] = it->second;
                 }
-                // else: ignored Key-XOR (no constraint), same as Phase 2 / Div2.
+                functionCallFlag = true;
             }
             else if (this->isConstant(ele->getLhs()) or this->isConstant(ele->getRhs())) {}
             else {
@@ -1073,9 +1082,11 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             }
         } else if (ele->getOp() == ASTNode::ADD or ele->getOp() == ASTNode::MINUS) {
             if (ele->getLhs()->getNodeType() == NodeType::UINT or ele->getRhs()->getNodeType() == NodeType::UINT) {
+                previousWasKeyXor = false;
                 continue;
             }
             if (isConstant(ele->getLhs()) or isConstant(ele->getRhs())) {
+                previousWasKeyXor = false;
                 continue;
             }
             std::cout << "WARNING: Modular ADD/MINUS operation encountered in BDPT division property analysis.\n"
@@ -1164,17 +1175,17 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
             }
         } else
             functionCallFlag = false;
+        previousWasKeyXor = currentNodeIsKeyXor;
     }
 
     // Cross mode is explicit: paper uses only Proposition 1's not-all-one plus
     // dominance relations; exact preserves EasyBC's one-flip selector model.
-    // Cross layer constraints, once per Key-XOR layer of the cross round, over
-    // the s key-covered bits collected during this round's Key-XORs:
+    // Cross layer constraints over the selected IR Key-XOR layer:
     //   (a) ell_0^t + ... + ell_{s-1}^t <= s - 1                (not all-ones)
     //   (weight) Sum(k_i^t*) - Sum(ell_i^t) = 1                 (K_t* = ell ∨ e_j)
     // The weight increment is what keeps K_t* tight (without it, (a)+(b) admit
     // any superset of L_t and every output bit saturates).
-    if (this->crossRound >= 1 && this->currentRound == this->crossRound && !this->crossLBits.empty()) {
+    if (this->selectedCrossLayer >= 0 && !this->crossLBits.empty()) {
         if (this->crossMode == BdptCrossMode::Paper) {
             BdptMILPcons::bdptCrossPaperC(
                 this->modelPath, this->crossKBits, this->crossLBits);
