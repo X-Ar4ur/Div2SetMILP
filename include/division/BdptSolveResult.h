@@ -12,6 +12,7 @@ struct BdptSolveResult {
     int solveCount = 0;
     double solverSeconds = 0.0;
     int lastStatus = 0;
+    std::string strategy;
     std::string reason;
     std::map<int, int> coordinateStatus;
     std::vector<int> iterationStatuses;

@@ -1,5 +1,6 @@
 #include "division/Div3SetMILP.h"
 #include "util/setup.h"
+#include <algorithm>
 #include <chrono>
 
 extern std::map<std::string, std::vector<int>> allBox;
@@ -304,6 +305,9 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoords(
     if (this->unitSearchMode == BdptUnitSearchMode::PerBit) {
         return solveMtReachableCoordsPerBit(lpFile, outIdx, effectiveSkip);
     }
+    if (this->unitSearchMode == BdptUnitSearchMode::Hybrid) {
+        return solveMtReachableCoordsHybrid(lpFile, outIdx, effectiveSkip);
+    }
     return solveMtReachableCoordsMinPin(lpFile, outIdx, effectiveSkip);
 }
 
@@ -321,6 +325,10 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsPerBit(
     GRBModel model = GRBModel(env, lpFile);
     model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
     model.set(GRB_DoubleParam_NodefileStart, 0.5);
+    if (!this->reproduction) {
+        model.set(GRB_IntParam_SolutionLimit, 1);
+    }
+    result.strategy = "per-bit";
 
     std::vector<GRBVar> outVars(outIdx.size());
     for (int j = 0; j < (int)outIdx.size(); ++j) {
@@ -383,6 +391,7 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
         const std::vector<int>& outIdx,
         const std::set<int>& skip) {
     BdptSolveResult result;
+    result.strategy = "min-pin";
 
     GRBEnv env = GRBEnv(true);
     env.set(GRB_IntParam_Threads, this->gurobiThreads);
@@ -478,6 +487,96 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
                   << lpFile << "; model result is incomplete." << std::endl;
         result.markIncomplete(status, "unsettled-min-pin-terminal-proof");
         break;
+    }
+    return result;
+}
+
+
+BdptSolveResult Div3SetMILP::solveMtReachableCoordsHybrid(
+        const std::string& lpFile,
+        const std::vector<int>& outIdx,
+        const std::set<int>& skip) {
+    BdptSolveResult result;
+    result.strategy = "hybrid";
+
+    GRBEnv env = GRBEnv(true);
+    env.set(GRB_IntParam_Threads, this->gurobiThreads);
+    env.set(GRB_IntParam_OutputFlag, 0);
+    env.start();
+    GRBModel model = GRBModel(env, lpFile);
+    const double minPinSliceSeconds =
+        std::min<double>((double)this->gurobiTimer, 120.0);
+    model.set(GRB_DoubleParam_TimeLimit, minPinSliceSeconds);
+    model.set(GRB_DoubleParam_NodefileStart, 0.5);
+    model.set(GRB_DoubleParam_BestObjStop, 1.0);
+
+    std::vector<GRBVar> outVars(outIdx.size());
+    for (int j = 0; j < (int)outIdx.size(); ++j) {
+        outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
+    }
+
+    for (int q : skip) {
+        if (q >= 0 && q < (int)outVars.size()) {
+            outVars[q].set(GRB_DoubleAttr_UB, 0.0);
+        }
+    }
+    model.update();
+
+    bool needsFallback = false;
+    while (true) {
+        auto solveStart = std::chrono::steady_clock::now();
+        model.optimize();
+        auto solveEnd = std::chrono::steady_clock::now();
+        result.solveCount++;
+        result.solverSeconds += std::chrono::duration<double>(
+            solveEnd - solveStart).count();
+        int status = model.get(GRB_IntAttr_Status);
+        result.lastStatus = status;
+        result.iterationStatuses.push_back(status);
+        int solCount = model.get(GRB_IntAttr_SolCount);
+        int objR = (solCount > 0) ? (int)(model.get(GRB_DoubleAttr_ObjVal) + 0.5) : -1;
+
+        if (solCount > 0 && objR == 1) {
+            int setIdx = -1;
+            for (int j = 0; j < (int)outVars.size(); ++j) {
+                if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) {
+                    setIdx = j;
+                    break;
+                }
+            }
+            if (setIdx < 0) {
+                result.markIncomplete(status, "hybrid-weight-one-without-set-output");
+                return result;
+            }
+            result.reachable.insert(setIdx);
+            outVars[setIdx].set(GRB_DoubleAttr_UB, 0.0);
+            model.update();
+            continue;
+        }
+
+        if (status == GRB_OPTIMAL || status == GRB_INFEASIBLE) {
+            return result;
+        }
+
+        needsFallback = true;
+        break;
+    }
+
+    if (!needsFallback) return result;
+
+    std::set<int> fallbackSkip = skip;
+    fallbackSkip.insert(result.reachable.begin(), result.reachable.end());
+    BdptSolveResult fallback =
+        solveMtReachableCoordsPerBit(lpFile, outIdx, fallbackSkip);
+    result.strategy = "hybrid+per-bit";
+    result.reachable.insert(fallback.reachable.begin(), fallback.reachable.end());
+    result.solveCount += fallback.solveCount;
+    result.solverSeconds += fallback.solverSeconds;
+    result.lastStatus = fallback.lastStatus;
+    result.coordinateStatus.insert(
+        fallback.coordinateStatus.begin(), fallback.coordinateStatus.end());
+    if (!fallback.complete) {
+        result.markIncomplete(fallback.lastStatus, "hybrid-fallback:" + fallback.reason);
     }
     return result;
 }
@@ -593,6 +692,12 @@ void Div3SetMILP::searchDistinguisher() {
            << ", Output: NBB-only\n";
     result << "Key-XOR layers discovered from IR: " << this->keyXorLayers.size()
            << " (last layer ignored by Remark 2)\n";
+    for (const auto& layer : this->keyXorLayers) {
+        result << "  keyxor#" << layer.id
+               << "@round " << layer.round
+               << " function=" << layer.roundFunction
+               << " xor_nodes=" << layer.xorNodeNames.size() << "\n";
+    }
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 
@@ -603,6 +708,8 @@ void Div3SetMILP::searchDistinguisher() {
         buildMtModel(tau, layer.id, lpFile);
         // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
         std::vector<int> outIdx = this->outputBitIndices;
+        const int skippedBefore = (int)unknownCoords.size();
+        const int remainingCandidates = (int)outIdx.size() - skippedBefore;
 
         // Pass the running unknown set as skip: a coordinate already shown
         // unknown by an earlier M_t need not be re-found here (the union is all
@@ -635,7 +742,10 @@ void Div3SetMILP::searchDistinguisher() {
           << " complete=" << (solveResult.complete ? 1 : 0)
           << " solves=" << solveResult.solveCount
           << " solver_seconds=" << solveResult.solverSeconds
-          << " status=" << solveResult.lastStatus;
+          << " status=" << solveResult.lastStatus
+          << " strategy=" << solveResult.strategy
+          << " skipped_unknowns=" << skippedBefore
+          << " remaining_candidates=" << remainingCandidates;
         if (!solveResult.reason.empty()) r << " reason=" << solveResult.reason;
         if (!solveResult.coordinateStatus.empty()) {
             r << " coord_statuses={";
@@ -660,6 +770,9 @@ void Div3SetMILP::searchDistinguisher() {
                   << " subset=3 model=Mt" << tau
                   << " cross_layer=" << layer.id
                   << " cross_round=" << layer.round
+                  << " strategy=" << solveResult.strategy
+                  << " skipped_unknowns=" << skippedBefore
+                  << " remaining_candidates=" << remainingCandidates
                   << " n_reachable=" << reach.size()
                   << " complete=" << (solveResult.complete ? 1 : 0)
                   << " solve_count=" << solveResult.solveCount

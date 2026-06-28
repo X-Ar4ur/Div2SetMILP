@@ -43,7 +43,7 @@ bool parseBdptOptionalArgs(const std::vector<std::string>& args,
         } else if (key == "cross" || key == "solver" ||
                    key == "sign" || key == "repro") {
             error = "'" + key + "' is not a production option for -div3; "
-                    "the 3-subset backend uses paper/min-pin/NBB-only by default";
+                    "the 3-subset backend uses exact/hybrid/NBB-only by default";
             return false;
         } else {
             error = "unknown -div3 option '" + key + "'";
@@ -60,5 +60,7 @@ std::string toString(BdptCrossMode mode) {
 }
 
 std::string toString(BdptUnitSearchMode mode) {
-    return mode == BdptUnitSearchMode::PerBit ? "per-bit" : "min-pin";
+    if (mode == BdptUnitSearchMode::PerBit) return "per-bit";
+    if (mode == BdptUnitSearchMode::MinPin) return "min-pin";
+    return "hybrid";
 }

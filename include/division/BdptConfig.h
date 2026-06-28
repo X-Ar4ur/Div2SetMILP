@@ -12,16 +12,19 @@ enum class BdptCrossMode {
 enum class BdptUnitSearchMode {
     PerBit,
     MinPin,
+    Hybrid,
 };
 
 struct BdptRunConfig {
     // Production defaults for EasyBC's 3-subset backend:
-    //   - Paper: Algorithm 3's safe Key-XOR cross constraints
-    //   - MinPin: enumerate reachable unit outputs efficiently
+    //   - Exact: Rule 1 Key-XOR cross propagation (L_t with one touched zero bit
+    //     raised into K_t*) as the framework-level BDPT semantics.
+    //   - Hybrid: use minimize-and-pin to find unit outputs quickly, then fall
+    //     back to per-coordinate feasibility for expensive no-unit proofs.
     //   - signLabeling=false: report NBB by default; M_L parity is not part of
     //     the normal Table-1-style distinguisher search.
-    BdptCrossMode crossMode = BdptCrossMode::Paper;
-    BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::MinPin;
+    BdptCrossMode crossMode = BdptCrossMode::Exact;
+    BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::Hybrid;
     bool signLabeling = false;
     bool reproduction = false;
     int timerSeconds = 86400;

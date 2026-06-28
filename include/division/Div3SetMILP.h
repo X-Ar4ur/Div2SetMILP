@@ -69,8 +69,8 @@ private:
     // only require balanced-bit coordinates.
     bool signLabeling = false;
     bool reproduction = false;
-    BdptCrossMode crossMode = BdptCrossMode::Paper;
-    BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::MinPin;
+    BdptCrossMode crossMode = BdptCrossMode::Exact;
+    BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::Hybrid;
 
     // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by
     // several operations, e.g. SIMON/Simeck where l_input feeds p1/p2/p3). The
@@ -169,6 +169,9 @@ private:
                                                  const std::vector<int>& outIdx,
                                                  const std::set<int>& skip);
     BdptSolveResult solveMtReachableCoordsMinPin(const std::string& lpFile,
+                                                 const std::vector<int>& outIdx,
+                                                 const std::set<int>& skip);
+    BdptSolveResult solveMtReachableCoordsHybrid(const std::string& lpFile,
                                                  const std::vector<int>& outIdx,
                                                  const std::set<int>& skip);
 
