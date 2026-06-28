@@ -496,88 +496,13 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsHybrid(
         const std::string& lpFile,
         const std::vector<int>& outIdx,
         const std::set<int>& skip) {
-    BdptSolveResult result;
-    result.strategy = "hybrid";
-
-    GRBEnv env = GRBEnv(true);
-    env.set(GRB_IntParam_Threads, this->gurobiThreads);
-    env.set(GRB_IntParam_OutputFlag, 0);
-    env.start();
-    GRBModel model = GRBModel(env, lpFile);
-    const double minPinSliceSeconds =
-        std::min<double>((double)this->gurobiTimer, 120.0);
-    model.set(GRB_DoubleParam_TimeLimit, minPinSliceSeconds);
-    model.set(GRB_DoubleParam_NodefileStart, 0.5);
-    model.set(GRB_DoubleParam_BestObjStop, 1.0);
-
-    std::vector<GRBVar> outVars(outIdx.size());
-    for (int j = 0; j < (int)outIdx.size(); ++j) {
-        outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
-    }
-
-    for (int q : skip) {
-        if (q >= 0 && q < (int)outVars.size()) {
-            outVars[q].set(GRB_DoubleAttr_UB, 0.0);
-        }
-    }
-    model.update();
-
-    bool needsFallback = false;
-    while (true) {
-        auto solveStart = std::chrono::steady_clock::now();
-        model.optimize();
-        auto solveEnd = std::chrono::steady_clock::now();
-        result.solveCount++;
-        result.solverSeconds += std::chrono::duration<double>(
-            solveEnd - solveStart).count();
-        int status = model.get(GRB_IntAttr_Status);
-        result.lastStatus = status;
-        result.iterationStatuses.push_back(status);
-        int solCount = model.get(GRB_IntAttr_SolCount);
-        int objR = (solCount > 0) ? (int)(model.get(GRB_DoubleAttr_ObjVal) + 0.5) : -1;
-
-        if (solCount > 0 && objR == 1) {
-            int setIdx = -1;
-            for (int j = 0; j < (int)outVars.size(); ++j) {
-                if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) {
-                    setIdx = j;
-                    break;
-                }
-            }
-            if (setIdx < 0) {
-                result.markIncomplete(status, "hybrid-weight-one-without-set-output");
-                return result;
-            }
-            result.reachable.insert(setIdx);
-            outVars[setIdx].set(GRB_DoubleAttr_UB, 0.0);
-            model.update();
-            continue;
-        }
-
-        if (status == GRB_OPTIMAL || status == GRB_INFEASIBLE) {
-            return result;
-        }
-
-        needsFallback = true;
-        break;
-    }
-
-    if (!needsFallback) return result;
-
-    std::set<int> fallbackSkip = skip;
-    fallbackSkip.insert(result.reachable.begin(), result.reachable.end());
-    BdptSolveResult fallback =
-        solveMtReachableCoordsPerBit(lpFile, outIdx, fallbackSkip);
-    result.strategy = "hybrid+per-bit";
-    result.reachable.insert(fallback.reachable.begin(), fallback.reachable.end());
-    result.solveCount += fallback.solveCount;
-    result.solverSeconds += fallback.solverSeconds;
-    result.lastStatus = fallback.lastStatus;
-    result.coordinateStatus.insert(
-        fallback.coordinateStatus.begin(), fallback.coordinateStatus.end());
-    if (!fallback.complete) {
-        result.markIncomplete(fallback.lastStatus, "hybrid-fallback:" + fallback.reason);
-    }
+    // The production default follows the paper/reference SolveModel strategy:
+    // keep one minimize-and-pin model alive, pin every reachable unit output,
+    // and pay one terminal proof instead of many per-coordinate infeasibility
+    // proofs. Falling back to per-bit when many candidates remain recreates the
+    // slow path seen on PRESENT Mt4.
+    BdptSolveResult result = solveMtReachableCoordsMinPin(lpFile, outIdx, skip);
+    result.strategy = "hybrid-min-pin";
     return result;
 }
 

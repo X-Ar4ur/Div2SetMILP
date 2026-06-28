@@ -159,9 +159,11 @@ private:
     // Objective Minimize sum k_i^r*. Resets state.
     void buildMtModel(int modelNumber, int keyXorLayerId, const std::string& modelFile);
 
-    // Algorithm 4 unknown test. The dispatcher selects either per-coordinate
-    // feasibility or minimize-and-pin. Both return structured completeness,
-    // status and timing data; `skip` contains coordinates already known unknown.
+    // Algorithm 4 unknown test. The dispatcher selects per-coordinate
+    // feasibility, explicit minimize-and-pin, or the production hybrid wrapper
+    // over the paper/reference minimize-and-pin loop. All return structured
+    // completeness, status and timing data; `skip` contains coordinates already
+    // known unknown.
     BdptSolveResult solveMtReachableCoords(const std::string& lpFile,
                                            const std::vector<int>& outIdx,
                                            const std::set<int>& skip);

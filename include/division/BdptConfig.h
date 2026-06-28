@@ -19,8 +19,9 @@ struct BdptRunConfig {
     // Production defaults for EasyBC's 3-subset backend:
     //   - Exact: Rule 1 Key-XOR cross propagation (L_t with one touched zero bit
     //     raised into K_t*) as the framework-level BDPT semantics.
-    //   - Hybrid: use minimize-and-pin to find unit outputs quickly, then fall
-    //     back to per-coordinate feasibility for expensive no-unit proofs.
+    //   - Hybrid: use the paper/reference minimize-and-pin loop as the default
+    //     production strategy; per-coordinate feasibility remains internal and
+    //     is not used as a large-candidate fallback.
     //   - signLabeling=false: report NBB by default; M_L parity is not part of
     //     the normal Table-1-style distinguisher search.
     BdptCrossMode crossMode = BdptCrossMode::Exact;
