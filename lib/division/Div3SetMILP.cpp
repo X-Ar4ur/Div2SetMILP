@@ -9,15 +9,10 @@ extern std::map<std::string, std::vector<int>> allBox;
 extern std::string cipherName;
 
 // =============================================================================
-// 3-subset BDPT MILP walker.
+// 三子集 BDPT MILP walker。
 //
-// The TAC walker below (programGenModel / roundFunctionGenModel /
-// sboxFunctionGenModel / XORGenModel / ANDGenModel / SboxGenModel /
-// PboxGenModel / consumeCopy / resolveActiveBitVars) is a deliberate COPY of the
-// Div2SetMILP walker (decision 2, doc/three_subset_bdpt_plan.md §3). The only
-// functional change vs Div2SetMILP is that SboxGenModel selects the O_k or O_l
-// inequality set according to `chainMode`. Everything else is byte-identical so
-// the K-chain model is a faithful clone of the Div2 model (Phase 2 diff anchor).
+// TAC 遍历逻辑沿用二子集后端的语义动作；差异在于 S 盒根据 chainMode
+// 选择 O_k/O_l，不同模型通过 Key-XOR 层切换链模式。
 // =============================================================================
 
 Div3SetMILP::Div3SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
@@ -35,8 +30,7 @@ std::vector<int> Div3SetMILP::resolveActiveBitVars() const {
 }
 
 
-// Phase 5: consume one copy of the bit currently represented by rawIdx.
-// Copied verbatim from Div2SetMILP::consumeCopy().
+// 消费当前 live 变量的一份 COPY。
 int Div3SetMILP::consumeCopy(int rawIdx) {
     if (rawIdx <= 0) return rawIdx;
     int live = rawIdx;
@@ -47,16 +41,12 @@ int Div3SetMILP::consumeCopy(int rawIdx) {
     int b = this->xCounter++;
     DivMILPcons::divCopyC(this->modelPath, live, std::vector<int>{a, b});
     this->liveChain[live] = b;
-    const bool may = abstractMayReach(live);
-    markAbstractMay(a, may);
-    markAbstractMay(b, may);
     return a;
 }
 
 
 void Div3SetMILP::resetState() {
     this->xCounter = 1;
-    this->dCounter = 1;
     this->blockSize = 0;
     this->tanNameMxIndex.clear();
     this->rtnMxIndex.clear();
@@ -72,9 +62,6 @@ void Div3SetMILP::resetState() {
     this->currentRound = 0;
     this->crossLBits.clear();
     this->crossKBits.clear();
-    this->localTransitions.clear();
-    this->abstractMay.clear();
-    this->abstractCandidateCoords.clear();
 }
 
 
@@ -142,8 +129,6 @@ void Div3SetMILP::preprocess() {
         }
         iterator++;
     }
-    loadBdptTrailOracles();
-
     auto _bench_t1 = std::chrono::steady_clock::now();
     long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
     std::cerr << "[BENCH] phase=preprocess cipher=" << this->cipherName
@@ -154,106 +139,22 @@ void Div3SetMILP::preprocess() {
 }
 
 
-void Div3SetMILP::loadBdptTrailOracles() {
-    this->sboxTrailOracles.clear();
-    for (const auto& item : this->sboxInputSize) {
-        const std::string& sboxName = item.first;
-        const std::string kTrailFile = this->pathPrefix + sboxName + "_DivisionTrails.txt";
-        const std::string lTrailFile = this->pathPrefix + sboxName + "_L_DivisionTrails.txt";
-        BdptTrailOracle oracle;
-        std::string error;
-        if (!oracle.load(this->sboxInputSize[sboxName],
-                         this->sboxOutputSize[sboxName],
-                         kTrailFile, lTrailFile, error)) {
-            std::cout << "ERROR: Cannot load BDPT trail oracle for "
-                      << sboxName << ": " << error << std::endl;
-            assert(false);
-        }
-        this->sboxTrailOracles[sboxName] = oracle;
-    }
-    std::cerr << "[BENCH] phase=bdpt_oracle cipher=" << this->cipherName
-              << " n_oracles=" << this->sboxTrailOracles.size() << std::endl;
-}
-
-
-bool Div3SetMILP::abstractMayReach(int idx) const {
-    if (idx <= 0) return false;
-    auto it = this->abstractMay.find(idx);
-    return it == this->abstractMay.end() ? true : it->second;
-}
-
-
-void Div3SetMILP::markAbstractMay(int idx, bool mayReach) {
-    if (idx > 0) this->abstractMay[idx] = mayReach;
-}
-
-
-bool Div3SetMILP::validateOracleTransitions(
-        GRBModel& model,
-        BdptLocalTransition& failed) const {
-    for (const BdptLocalTransition& tr : this->localTransitions) {
-        auto oracleIt = this->sboxTrailOracles.find(tr.sboxName);
-        if (oracleIt == this->sboxTrailOracles.end()) continue;
-
-        int inputMask = 0;
-        for (int i = 0; i < (int)tr.inputVars.size(); ++i) {
-            GRBVar v = model.getVarByName("x" + std::to_string(tr.inputVars[i]));
-            if (v.get(GRB_DoubleAttr_X) > 0.5) inputMask |= (1 << i);
-        }
-        int outputMask = 0;
-        for (int i = 0; i < (int)tr.outputVars.size(); ++i) {
-            GRBVar v = model.getVarByName("x" + std::to_string(tr.outputVars[i]));
-            if (v.get(GRB_DoubleAttr_X) > 0.5) outputMask |= (1 << i);
-        }
-
-        const BdptTrailKind kind =
-            (tr.mode == CHAIN_L) ? BdptTrailKind::L : BdptTrailKind::K;
-        if (!oracleIt->second.allows(kind, inputMask, outputMask)) {
-            failed = tr;
-            return false;
-        }
-    }
-    return true;
-}
-
-
-void Div3SetMILP::addBdptOracleCut(
-        GRBModel& model,
-        const BdptLocalTransition& failed) {
-    GRBLinExpr cut = 0;
-    for (int idx : failed.inputVars) {
-        GRBVar v = model.getVarByName("x" + std::to_string(idx));
-        if (v.get(GRB_DoubleAttr_X) > 0.5) cut += 1 - v;
-        else cut += v;
-    }
-    for (int idx : failed.outputVars) {
-        GRBVar v = model.getVarByName("x" + std::to_string(idx));
-        if (v.get(GRB_DoubleAttr_X) > 0.5) cut += 1 - v;
-        else cut += v;
-    }
-    model.addConstr(cut >= 1,
-                    "bdpt_oracle_cut_" + std::to_string(this->oracleCutCounter++));
-    model.update();
-}
-
-
 void Div3SetMILP::MGR() {
     std::cout << "\n===== Step 3: 3-subset BDPT MILP Modeling =====" << std::endl;
     std::cout << "Cipher: " << this->cipherName
               << ", Rounds: " << this->rounds
               << ", Active bits: " << this->activebitsSpec
-              << ", Strategy: auto-bdpt-oracle-cegar"
-              << ", Output: NBB-only" << std::endl;
+              << ", Strategy: paper-alg3-alg4-min-pin"
+              << ", Output: sum0/sum1/unknown" << std::endl;
 
-    preprocess(); // Load both O_k and O_l reduced inequalities.
+    preprocess(); // 加载 O_k 与 O_l 两套 S 盒可分迹不等式。
 
     this->runDir = this->pathPrefix + "milp/";
     (void)system(("mkdir -p " + this->runDir).c_str());
     this->resultsPath = this->runDir + "result_" + std::to_string(this->rounds)
                         + "_" + this->activebitsSpec + "_subset3.txt";
 
-    // Run Algorithm 4: build + solve the model set P = {M_1, ..., M_{r-1}} and
-    // report the balanced output coordinates.
+    // 运行论文 Algorithm 4：模型集 P 判 unknown，M_L 判 sum=0/1。
     searchDistinguisher();
 
     std::cout << "\n===== 3-subset BDPT distinguisher search complete =====" << std::endl;
@@ -282,26 +183,9 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
     GRBModel model = GRBModel(env, lpFile);
     model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
     model.set(GRB_DoubleParam_NodefileStart, 0.5);
-    // Paper Algorithm 4 / Stopping Rule 2 via ITERATIVE MINIMIZE-AND-PIN (the
-    // reference repo's SolveModel technique, algorithm3_4__Cross_propagation.py).
-    //
-    // We must find every output coordinate q for which the unit vector e_q is a
-    // reachable K_r*. The old code fixed K_r* = e_q for each q and ran a separate
-    // feasibility/INFEASIBILITY check -- up to n solves per model, and the (~n/2)
-    // UNREACHABLE coordinates each force Gurobi to PROVE infeasibility on the
-    // loose L-chain+K-chain model, which is the slow part of MILP. For PRESENT 9r
-    // this hangs on the middle cross rounds (see data/division/PRESENT/run_9_63*).
-    //
-    // Instead we minimize the K_r* weight (the .lp objective, paper Alg 3 line 4):
-    //   * an optimum of 1 is a reachable unit vector e_j  -> j unknown; pin it to
-    //     0 (UB=0) and re-solve to find the next one;
-    //   * an optimum >= 2 (or INFEASIBLE) PROVES no remaining free coordinate is
-    //     reachable as a unit vector -> the loop stops.
-    // That is ONE bound proof per model instead of one infeasibility proof per
-    // coordinate -- the dominant speed-up. BestObjStop=1 lets a weight-1 incumbent
-    // terminate the solve immediately (it is always optimal since |K_r*| >= 1 on
-    // any feasible trail), so only the terminal "optimum >= 2" solve pays a full
-    // proof.
+    // 论文 Algorithm 4 需要判断每个 K_q 是否可达。这里按论文目标函数
+    // Minimize sum k_i^{r*} 做 min-pin 枚举：每找到一个权重为 1 的输出单位
+    // 向量就把该坐标固定为 0，再继续找下一个单位向量。
     model.set(GRB_DoubleParam_BestObjStop, 1.0);
 
     std::vector<GRBVar> outVars(outIdx.size());
@@ -309,16 +193,33 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
         outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
     }
 
-    // Coordinates already known unknown from an earlier M_t need not be found
-    // again (only the union matters). Pinning them to 0 also tightens the
-    // minimize without excluding any e_j for a still-free j (e_j has every other
-    // output bit, including these, at 0 anyway).
+    GRBLinExpr sumRemainingExpr = 0;
+    int remaining = 0;
     for (int q : skip) {
         if (q >= 0 && q < (int)outVars.size()) outVars[q].set(GRB_DoubleAttr_UB, 0.0);
     }
+    for (int q = 0; q < (int)outVars.size(); ++q) {
+        if (skip.count(q)) continue;
+        sumRemainingExpr += outVars[q];
+        remaining++;
+    }
+    if (remaining == 0) {
+        return result;
+    }
+    model.addConstr(sumRemainingExpr >= 1, "bdpt_min_pin_nonzero_output");
     model.update();
 
+    auto started = std::chrono::steady_clock::now();
     while (true) {
+        double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        double remainingSeconds = (double)this->gurobiTimer - elapsed;
+        if (remainingSeconds <= 0.0) {
+            result.markIncomplete(GRB_TIME_LIMIT, "min-pin-time-budget-exhausted");
+            break;
+        }
+        model.set(GRB_DoubleParam_TimeLimit, remainingSeconds);
+
         auto solveStart = std::chrono::steady_clock::now();
         model.optimize();
         auto solveEnd = std::chrono::steady_clock::now();
@@ -332,18 +233,8 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
         // objVal >= 0, so round-to-nearest is (int)(v + 0.5); -1 marks "no incumbent".
         int objR = (solCount > 0) ? (int)(model.get(GRB_DoubleAttr_ObjVal) + 0.5) : -1;
 
-        // A weight-1 incumbent is provably optimal (no feasible trail has K_r*
-        // weight 0), so consume it regardless of solve status (OPTIMAL,
-        // USER_OBJ_LIMIT via BestObjStop, or even TIME_LIMIT) and keep going.
+        // 由于存在 sumRemainingExpr >= 1，权重 1 incumbent 已经是单位输出。
         if (solCount > 0 && objR == 1) {
-            BdptLocalTransition failedTransition;
-            result.oracleChecks++;
-            if (!validateOracleTransitions(model, failedTransition)) {
-                addBdptOracleCut(model, failedTransition);
-                result.oracleCuts++;
-                continue;
-            }
-
             int setIdx = -1;
             for (int j = 0; j < (int)outVars.size(); ++j) {
                 if (outVars[j].get(GRB_DoubleAttr_X) > 0.5) { setIdx = j; break; }
@@ -352,19 +243,17 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
                 result.markIncomplete(status, "weight-one-solution-without-set-output");
                 break;
             }
-            result.reachable.insert(setIdx);  // e_setIdx reachable -> coord unknown
-            outVars[setIdx].set(GRB_DoubleAttr_UB, 0.0);  // pin and look for the next
+            result.reachable.insert(setIdx);
+            result.coordinateStatus[setIdx] = status;
+            outVars[setIdx].set(GRB_DoubleAttr_UB, 0.0);
             model.update();
             continue;
         }
 
         if (status == GRB_OPTIMAL || status == GRB_INFEASIBLE) {
-            // Proven optimum >= 2 (or no feasible / all-zero output): no remaining
-            // free coordinate is reachable as a unit vector -> they are determined.
             break;
         }
 
-        // Unsettled (TIME_LIMIT / other) with no terminal proof.
         std::cout << "WARNING: Gurobi status " << status << " (no proof) for "
                   << lpFile << "; model result is incomplete." << std::endl;
         result.markIncomplete(status, "unsettled-min-pin-terminal-proof");
@@ -373,17 +262,75 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
     return result;
 }
 
+
+int Div3SetMILP::classifyMLParity(const std::string& lpFile,
+                                  const std::vector<int>& outIdx,
+                                  int coord,
+                                  int& solutionCount) {
+    solutionCount = 0;
+    int parity = 0;
+
+    GRBEnv env = GRBEnv(true);
+    env.set(GRB_IntParam_Threads, this->gurobiThreads);
+    env.set(GRB_IntParam_OutputFlag, 0);
+    env.start();
+    GRBModel model = GRBModel(env, lpFile);
+    model.set(GRB_DoubleParam_NodefileStart, 0.5);
+
+    for (int j = 0; j < (int)outIdx.size(); ++j) {
+        GRBVar v = model.getVarByName("x" + std::to_string(outIdx[j]));
+        const double fixed = (j == coord) ? 1.0 : 0.0;
+        v.set(GRB_DoubleAttr_LB, fixed);
+        v.set(GRB_DoubleAttr_UB, fixed);
+    }
+
+    GRBVar* rawVars = model.getVars();
+    const int numVars = model.get(GRB_IntAttr_NumVars);
+    std::vector<GRBVar> vars(rawVars, rawVars + numVars);
+    delete[] rawVars;
+    model.update();
+
+    auto started = std::chrono::steady_clock::now();
+    while (true) {
+        double elapsed = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - started).count();
+        double remainingSeconds = (double)this->gurobiTimer - elapsed;
+        if (remainingSeconds <= 0.0) {
+            return -1;
+        }
+        model.set(GRB_DoubleParam_TimeLimit, remainingSeconds);
+        model.optimize();
+        const int status = model.get(GRB_IntAttr_Status);
+        const int solCount = model.get(GRB_IntAttr_SolCount);
+
+        if (status == GRB_INFEASIBLE) {
+            return parity;
+        }
+        if (status != GRB_OPTIMAL || solCount <= 0) {
+            return -1;
+        }
+
+        solutionCount++;
+        parity ^= 1;
+
+        GRBLinExpr noGood = 0;
+        for (GRBVar& v : vars) {
+            if (v.get(GRB_DoubleAttr_X) > 0.5) noGood += 1 - v;
+            else noGood += v;
+        }
+        model.addConstr(noGood >= 1,
+                        "bdpt_ml_nogood_" + std::to_string(solutionCount));
+        model.update();
+    }
+}
+
+
 void Div3SetMILP::searchDistinguisher() {
     auto _bench_t0 = std::chrono::steady_clock::now();
 
     std::string base = this->runDir + this->cipherName + "_" + std::to_string(this->rounds)
                        + "_" + this->activebitsSpec + "_subset3";
 
-    // Union of unknown output coordinates across the model set P. Algorithm 3
-    // constructs M_t after t rounds of f_e, so the selected Key-XOR layers must
-    // follow the IR semantics. For ARK-at-input SPNs (PRESENT/Rectangle) this
-    // skips the initial whitening-like layer; for ARK-at-output rounds it drops
-    // the final Key-XOR as in Remark 2.
     this->keyXorLayers = discoverBdptKeyXorLayers(this->procedureHs, this->rounds);
     if (this->keyXorLayers.empty()) {
         std::cout << "ERROR: No Key-XOR layer was discovered from the IR; "
@@ -398,17 +345,23 @@ void Div3SetMILP::searchDistinguisher() {
         assert(false);
     }
 
+    std::string mlFile = base + "_ML.lp";
+    buildMLModel(mlFile);
+    std::vector<int> mlOutIdx = this->outputBitIndices;
+    const int resultBlockSize = this->blockSize;
+
     std::set<int> unknownCoords;
     int nModels = (int)scheduledCrossLayers.size();
     int modelsAttempted = 0;
-    bool modelSetComplete = true;
+    bool searchComplete = true;
     std::string incompleteReason;
 
     std::ofstream result(this->resultsPath, std::ios::trunc);
     result << "===== 3-subset BDPT integral distinguisher search =====\n";
     result << "Cipher: " << this->cipherName << ", Rounds: " << this->rounds
            << ", Active bits: " << this->activebitsSpec << "\n";
-    result << "Strategy: auto-bdpt-oracle-cegar, Output: NBB-only\n";
+    result << "Strategy: paper-alg3-alg4-min-pin\n";
+    result << "M_L model: " << mlFile << "\n";
     result << "Key-XOR layers discovered from IR: " << this->keyXorLayers.size() << "\n";
     for (const auto& layer : this->keyXorLayers) {
         result << "  keyxor#" << layer.id
@@ -439,15 +392,8 @@ void Div3SetMILP::searchDistinguisher() {
         // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
         std::vector<int> outIdx = this->outputBitIndices;
         std::set<int> solverSkip = unknownCoords;
-        for (int q = 0; q < (int)outIdx.size(); ++q) {
-            if (!this->abstractCandidateCoords.count(q)) solverSkip.insert(q);
-        }
         const int skippedBefore = (int)unknownCoords.size();
-        const int abstractSkipped = (int)outIdx.size() - (int)this->abstractCandidateCoords.size();
-        int remainingCandidates = 0;
-        for (int q : this->abstractCandidateCoords) {
-            if (!unknownCoords.count(q)) remainingCandidates++;
-        }
+        int remainingCandidates = (int)outIdx.size() - skippedBefore;
 
         // Pass the running unknown set as skip: a coordinate already shown
         // unknown by an earlier M_t need not be re-found here (the union is all
@@ -456,7 +402,7 @@ void Div3SetMILP::searchDistinguisher() {
             solveMtReachableCoords(lpFile, outIdx, solverSkip);
         std::set<int> reach = solveResult.reachable;
         if (!solveResult.complete) {
-            modelSetComplete = false;
+            searchComplete = false;
             incompleteReason = "M_" + std::to_string(tau) + ":"
                                + solveResult.reason;
             // Conservative fallback: an unproved coordinate remains unknown and
@@ -482,11 +428,7 @@ void Div3SetMILP::searchDistinguisher() {
           << " solver_seconds=" << solveResult.solverSeconds
           << " status=" << solveResult.lastStatus
           << " strategy=" << solveResult.strategy
-          << " oracle_checks=" << solveResult.oracleChecks
-          << " oracle_cuts=" << solveResult.oracleCuts
           << " skipped_unknowns=" << skippedBefore
-          << " abstract_candidates=" << this->abstractCandidateCoords.size()
-          << " abstract_skipped=" << abstractSkipped
           << " remaining_candidates=" << remainingCandidates;
         if (!solveResult.reason.empty()) r << " reason=" << solveResult.reason;
         if (!solveResult.coordinateStatus.empty()) {
@@ -520,19 +462,32 @@ void Div3SetMILP::searchDistinguisher() {
                   << " complete=" << (solveResult.complete ? 1 : 0)
                   << " solve_count=" << solveResult.solveCount
                   << " solver_seconds=" << solveResult.solverSeconds
-                  << " oracle_checks=" << solveResult.oracleChecks
-                  << " oracle_cuts=" << solveResult.oracleCuts
                   << " status=" << solveResult.lastStatus << std::endl;
 
     }
 
-    // ---- Algorithm 4, second half (Stopping Rule 2). Every DETERMINED output
-    // coordinate (not reachable as a K_r* unit vector in any M_t) is a BALANCED
-    // bit. EasyBC's engineering backend reports NBB by default: balanced means
-    // no reachable K_r* unit coordinate was found in any certified M_t.
-    std::vector<int> balanced;       // = determined: all balanced bits (NBB)
-    for (int j = 0; j < this->blockSize; ++j) {
-        if (!unknownCoords.count(j)) balanced.push_back(j);
+    std::vector<int> sum0;
+    std::vector<int> sum1;
+    std::vector<int> unresolved;
+    for (int q = 0; q < resultBlockSize; ++q) {
+        if (unknownCoords.count(q)) continue;
+        int solutionCount = 0;
+        int parity = classifyMLParity(mlFile, mlOutIdx, q, solutionCount);
+        std::ofstream r(this->resultsPath, std::ios::app);
+        r << "M_L coord " << q
+          << ": parity=" << parity
+          << " solutions=" << solutionCount << "\n";
+        r.close();
+
+        if (parity == 0) sum0.push_back(q);
+        else if (parity == 1) sum1.push_back(q);
+        else {
+            unresolved.push_back(q);
+            searchComplete = false;
+            if (incompleteReason.empty()) {
+                incompleteReason = "M_L:unsettled-parity";
+            }
+        }
     }
 
     auto writeCoordSet = [](std::ofstream& os, const char* label,
@@ -543,6 +498,10 @@ void Div3SetMILP::searchDistinguisher() {
         os << "}\n";
     };
 
+    std::vector<int> balanced;
+    balanced.insert(balanced.end(), sum0.begin(), sum0.end());
+    balanced.insert(balanced.end(), sum1.begin(), sum1.end());
+
     std::ofstream r(this->resultsPath, std::ios::app);
     {
         r << "\nUnknown coords (" << unknownCoords.size() << "): {";
@@ -551,12 +510,15 @@ void Div3SetMILP::searchDistinguisher() {
         r << "}\n";
     }
     writeCoordSet(r, "Balanced bits (NBB)", balanced);
+    writeCoordSet(r, "  - sum=0 coords", sum0);
+    writeCoordSet(r, "  - sum=1 coords", sum1);
+    writeCoordSet(r, "  - 'b' (sign unresolved) coords", unresolved);
     r << "\n";
-    r << "Model-set completeness: "
-      << (modelSetComplete ? "COMPLETE" : "INCOMPLETE") << "\n";
-    if (!modelSetComplete) {
+    r << "Reproduction completeness: "
+      << (searchComplete ? "COMPLETE" : "INCOMPLETE") << "\n";
+    if (!searchComplete) {
         r << "Incomplete reason: " << incompleteReason << "\n";
-        r << "Conservative fallback applied: unsettled coordinates were kept unknown\n";
+        r << "Unsettled coordinates were excluded from reproducible NBB\n";
     }
     if (!balanced.empty())
         r << "Integral Distinguisher Found! (" << balanced.size() << " balanced bits)\n";
@@ -569,9 +531,9 @@ void Div3SetMILP::searchDistinguisher() {
 
     std::cout << "\nBDPT result: " << balanced.size() << " balanced (NBB)";
     std::cout << ", " << unknownCoords.size() << " unknown (block size "
-              << this->blockSize << ")" << std::endl;
-    if (!modelSetComplete)
-        std::cout << "*** Model set incomplete; conservative unknown fallback applied: "
+              << resultBlockSize << ")" << std::endl;
+    if (!searchComplete)
+        std::cout << "*** BDPT search incomplete; unresolved coordinates excluded from NBB: "
                   << incompleteReason << " ***" << std::endl;
     if (!balanced.empty())
         std::cout << "*** Integral Distinguisher Found! (" << balanced.size()
@@ -587,11 +549,14 @@ void Div3SetMILP::searchDistinguisher() {
               << " elapsed_ms=" << _bench_ms
               << " n_models=" << nModels
               << " n_models_attempted=" << modelsAttempted
-              << " model_set_complete=" << (modelSetComplete ? 1 : 0)
-              << " strategy=auto-bdpt-oracle-cegar"
+              << " model_set_complete=" << (searchComplete ? 1 : 0)
+              << " strategy=paper-alg3-alg4-min-pin"
               << " n_balanced=" << balanced.size()
+              << " n_sum0=" << sum0.size()
+              << " n_sum1=" << sum1.size()
+              << " n_unresolved=" << unresolved.size()
               << " n_unknown=" << unknownCoords.size()
-              << " block_size=" << this->blockSize
+              << " block_size=" << resultBlockSize
               << " distinguisher_found=" << (balanced.empty() ? 0 : 1)
               << " threads=" << this->gurobiThreads << std::endl;
 }
@@ -649,14 +614,37 @@ void Div3SetMILP::writeLpFile(const std::string& modeTag) {
     for (int i = 1; i < this->xCounter; ++i) {
         binary << "x" << i << "\n";
     }
-    for (int i = 1; i < this->dCounter; ++i) {
-        binary << "d" << i << "\n";
-    }
     binary << "End";
     binary.close();
 
     std::cout << modeTag << " MILP model written to: " << this->modelPath
               << "  (x1.." << (this->xCounter - 1) << ")" << std::endl;
+}
+
+
+void Div3SetMILP::buildMLModel(const std::string& modelFile) {
+    auto _bench_t0 = std::chrono::steady_clock::now();
+
+    resetState();
+    this->selectedCrossLayer = -1;
+    this->chainMode = CHAIN_L;
+    this->modelPath = modelFile;
+
+    std::ofstream clearFile(this->modelPath, std::ios::trunc);
+    clearFile.close();
+
+    programGenModel();
+    writeLpFile("ML");
+
+    auto _bench_t1 = std::chrono::steady_clock::now();
+    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
+    std::cerr << "[BENCH] phase=build cipher=" << this->cipherName
+              << " subset=3 model=ML"
+              << " rounds=" << this->rounds
+              << " activebits=" << this->activebitsSpec
+              << " elapsed_ms=" << _bench_ms
+              << " n_xvars=" << (this->xCounter - 1)
+              << " block_size=" << this->blockSize << std::endl;
 }
 
 
@@ -744,14 +732,7 @@ void Div3SetMILP::programGenModel() {
     for (int & i : this->rtnIdxSave) {
         this->outputBitIndices.push_back(i);
     }
-    this->abstractCandidateCoords.clear();
-    for (int j = 0; j < (int)this->outputBitIndices.size(); ++j) {
-        if (abstractMayReach(this->outputBitIndices[j])) {
-            this->abstractCandidateCoords.insert(j);
-        }
-    }
-
-    // Phase 5: pin dead tails to 0 (copied from Div2SetMILP::programGenModel).
+    // 将 COPY 链中不再被读取且不是输出的尾变量固定为 0。
     std::set<int> chainKeys;
     std::set<int> chainValues;
     for (const auto& kv : this->liveChain) {
@@ -782,12 +763,9 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
         this->rtnIdxSave.clear();
         this->rtnMxIndex.clear();
     } else {
-        std::vector<int> activeVars = this->resolveActiveBitVars();
-        std::set<int> activeSet(activeVars.begin(), activeVars.end());
         for (const auto & i : procedureH->getParameters().at(2)) {
             const int idx = this->xCounter;
             this->tanNameMxIndex[i->getNodeName()] = idx;
-            markAbstractMay(idx, activeSet.count(idx) != 0);
             this->xCounter++;
         }
     }
@@ -816,7 +794,6 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                     this->crossLBits.push_back(lIdx);
                     this->crossKBits.push_back(kIdx);
                     this->tanNameMxIndex[ele->getNodeName()] = kIdx;
-                    markAbstractMay(kIdx, true);
                     this->chainMode = CHAIN_K;
                 } else {
                     this->tanNameMxIndex[ele->getNodeName()] = it->second;
@@ -936,17 +913,11 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
         previousWasKeyXor = currentNodeIsKeyXor;
     }
 
-    // Cross mode is explicit: paper uses only Proposition 1's not-all-one plus
-    // dominance relations; exact preserves EasyBC's one-flip selector model.
-    // Cross layer constraints over the selected IR Key-XOR layer:
-    //   (a) ell_0^t + ... + ell_{s-1}^t <= s - 1                (not all-ones)
-    //   (weight) Sum(k_i^t*) - Sum(ell_i^t) = 1                 (K_t* = ell ∨ e_j)
-    // The weight increment is what keeps K_t* tight (without it, (a)+(b) admit
-    // any superset of L_t and every output bit saturates).
+    // 论文 Algorithm 3 第 9-10 行：L_t 在 key 覆盖位置不全为 1，
+    // 且 K_t* 按位支配 L_t。
     if (this->selectedCrossLayer >= 0 && !this->crossLBits.empty()) {
-        BdptMILPcons::bdptCrossExactOneFlipC(
-            this->modelPath, this->crossKBits,
-            this->crossLBits, this->dCounter);
+        BdptMILPcons::bdptCrossPaperC(
+            this->modelPath, this->crossKBits, this->crossLBits);
         this->crossLBits.clear();
         this->crossKBits.clear();
     }
@@ -1161,7 +1132,6 @@ void Div3SetMILP::XORGenModel(const ThreeAddressNodePtr &left, const ThreeAddres
     inputIdx2 = consumeCopy(inputIdx2);
 
     DivMILPcons::divXorC(this->modelPath, inputIdx1, inputIdx2, outputIdx);
-    markAbstractMay(outputIdx, abstractMayReach(inputIdx1) || abstractMayReach(inputIdx2));
 }
 
 
@@ -1300,7 +1270,6 @@ void Div3SetMILP::ANDGenModel(const ThreeAddressNodePtr &left, const ThreeAddres
     inputIdx2 = consumeCopy(inputIdx2);
 
     DivMILPcons::divAndC(this->modelPath, inputIdx1, inputIdx2, outputIdx);
-    markAbstractMay(outputIdx, abstractMayReach(inputIdx1) || abstractMayReach(inputIdx2));
 }
 
 
@@ -1325,38 +1294,12 @@ void Div3SetMILP::SboxGenModel(const ThreeAddressNodePtr &sbox, const ThreeAddre
                                      : this->sboxDivIneqs[sbox->getNodeName()];
 
     DivMILPcons::divSboxC(this->modelPath, inputIdx, outputIdx, ineqSet);
-
-    BdptLocalTransition transition;
-    transition.sboxName = sbox->getNodeName();
-    transition.mode = this->chainMode;
-    transition.inputVars = inputIdx;
-    transition.outputVars = outputIdx;
-    this->localTransitions.push_back(transition);
-
-    int inputMask = 0;
-    for (int i = 0; i < (int)inputIdx.size(); ++i) {
-        if (abstractMayReach(inputIdx[i])) inputMask |= (1 << i);
-    }
-    int outputMask = 0;
-    auto oracleIt = this->sboxTrailOracles.find(sbox->getNodeName());
-    if (oracleIt != this->sboxTrailOracles.end()) {
-        const BdptTrailKind kind =
-            (this->chainMode == CHAIN_L) ? BdptTrailKind::L : BdptTrailKind::K;
-        outputMask = oracleIt->second.possibleOutputs(kind, inputMask);
-    } else if (inputMask != 0) {
-        outputMask = (1 << outputSize) - 1;
-    }
-    for (int i = 0; i < (int)outputIdx.size(); ++i) {
-        markAbstractMay(outputIdx[i], (outputMask & (1 << i)) != 0);
-    }
 }
 
 
 void Div3SetMILP::PboxGenModel(const ThreeAddressNodePtr &pbox, const ThreeAddressNodePtr &input,
                                 const ThreeAddressNodePtr &output) {
-    // Permutation is pure variable reindexing for both K and L sets (copied from
-    // Div2SetMILP::PboxGenModel). Each crossing bit counts as one read (Phase 5
-    // copy-on-read).
+    // P 盒对 K/L 都只是变量重排；每个穿过 P 盒的比特视为一次读取。
     std::vector<int> pboxValue = this->Box[pbox->getNodeName()];
     std::vector<int> inputIdx = extIdxFromTOUINTorBOXINDEX(input);
     for (int &idx : inputIdx) idx = consumeCopy(idx);

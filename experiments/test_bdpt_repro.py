@@ -147,12 +147,12 @@ class BdptReproductionTests(unittest.TestCase):
                 result_path=result_path,
                 golden_path=golden_path,
                 output_dir=output_dir,
-                metadata={"cross": "paper", "solver": "per-bit"},
+                metadata={"cross": "paper", "solver": "min-pin"},
             )
 
             self.assertEqual(report["status"], "PASS")
             self.assertEqual(report["cross"], "paper")
-            self.assertEqual(report["solver"], "per-bit")
+            self.assertEqual(report["solver"], "min-pin")
             self.assertTrue((output_dir / "report.json").exists())
             self.assertTrue((output_dir / "report.csv").exists())
             self.assertTrue((output_dir / "report.md").exists())
@@ -161,7 +161,7 @@ class BdptReproductionTests(unittest.TestCase):
                 (output_dir / "report.md").read_text(encoding="utf-8"),
             )
             self.assertIn(
-                "paper/per-bit",
+                "paper/min-pin",
                 (output_dir / "report.md").read_text(encoding="utf-8"),
             )
 

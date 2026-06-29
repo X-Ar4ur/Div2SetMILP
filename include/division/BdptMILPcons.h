@@ -38,38 +38,7 @@ namespace BdptMILPcons {
     // lIndices holds the MILP indices of the s key-covered L bits (ell_i^t).
     void bdptCrossNotAllOneC(std::string path, const std::vector<int>& lIndices);
 
-    // Hamming-weight increment, once per Key-XOR layer:
-    //   (x{k0} + ... ) - (x{l0} + ... ) = 1
-    // Proposition 1 builds K_t* as ell ∨ e_j for a SINGLE key-covered zero
-    // position j, i.e. K_t* has exactly one more set bit than L_t. Constraints
-    // (a)+(b) alone only force K_t* ⊇ L_t (any superset), which over-approximates
-    // K_r and saturates every output bit; this equality pins the increment to 1.
-    // kIndices / lIndices are the per-bit K_t* and L_t MILP indices of the layer
-    // (full-block Key-XOR, s = n: every state bit is key-covered).
-    void bdptCrossWeightIncrementC(std::string path,
-                                   const std::vector<int>& kIndices,
-                                   const std::vector<int>& lIndices);
-
-    // Exact selector encoding for Proposition 1:
-    // choose exactly one key-covered zero bit of L_t and set that bit in K_t*.
-    //
-    // For each paired bit:
-    //   sum d_i = 1
-    //   d_i + l_i <= 1
-    //   k_i - l_i - d_i = 0
-    //
-    // dCounter is the caller-owned binary auxiliary counter. The writer emits
-    // d{dCounter}, d{dCounter+1}, ... and advances dCounter past the last one.
-    void bdptCrossExactOneFlipC(std::string path,
-                                const std::vector<int>& kIndices,
-                                const std::vector<int>& lIndices,
-                                int& dCounter);
-
-    // Paper Algorithm 3 / Proposition 1 baseline. This deliberately emits only
-    // the two relations stated in the paper:
-    //   * L is not the all-one vector over the key-covered positions;
-    //   * K* dominates L coordinate-wise.
-    // It does not introduce selector variables or the stronger weight equation.
+    // 论文 Algorithm 3 的 cross 约束组合：不全 1 + K_t* 支配 L_t。
     void bdptCrossPaperC(std::string path,
                          const std::vector<int>& kIndices,
                          const std::vector<int>& lIndices);

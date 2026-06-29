@@ -1,23 +1,12 @@
 //
-// 3-subset bit-based division property (BDPT) MILP Manager — Algorithm 3 + 4.
+// 三子集比特级可分性（BDPT）MILP 后端，对应参考论文 Algorithm 3/4。
+// 该后端由 `-div3` 入口调用，与二子集 Div2SetMILP 共存且不修改二子集路径。
 //
-// Coexists with the 2-subset Div2SetMILP (CBDP). Selected via the `-div3`
-// subcommand. The full pipeline (S-box K/L division-trail inequalities,
-// Key-XOR cross propagation, per-output-bit decision) is built incrementally;
-// see doc/three_subset_bdpt_plan.md.
-//
-// Phase 2 (current): the TAC walker is copied from Div2SetMILP and parameterized
-// by a per-round chain mode (CHAIN_K uses the O_k inequalities, CHAIN_L uses the
-// O_l inequalities loaded from <sbox>_L_Reduce_Inequalities.txt). MGR() emits two
-// standalone models — a pure K-chain (a faithful clone of the Div2 model, used as
-// a zero-regression diff anchor) and a pure L-chain (M_L, the full r-round L
-// propagation). Key-XOR cross propagation (Phase 3) and the per-bit decision /
-// counting solver (Phase 4) are added later.
-//
-// IMPORTANT (decision 2, doc §3): the walker below is a deliberate COPY of the
-// Div2SetMILP walker, NOT a shared base class. Keep both in sync; any drift in
-// the K-chain logic must be mirrored here (and is guarded by the Phase 2 diff
-// against the Div2 model). Div2SetMILP is never modified.
+// 建模结构：
+//   * M_L：全 r 轮 L 链，使用 O_l 不等式；
+//   * M_t：cross 前使用 O_l，选中 Key-XOR 后切换到 O_k；
+//   * Key-XOR cross：只加入论文第 9-10 行的不全 1 与支配约束；
+//   * 求解：模型集 P 用 min-pin 枚举单位 K_q，M_L 枚举 L_q 解数奇偶。
 //
 
 #ifndef EASYBC_DIV3SETMILP_H
@@ -40,27 +29,16 @@
 #include "BdptSolveResult.h"
 #include "BdptKeyXor.h"
 #include "BdptSemanticScheduler.h"
-#include "BdptTrailOracle.h"
 
 #include "gurobi_c++.h"
 
 class Div3SetMILP {
 
 public:
-    // Which S-box division-trail inequality set the walker emits for the
-    // current round. CHAIN_K -> O_k (sboxDivIneqs), CHAIN_L -> O_l
-    // (sboxLDivIneqs). In Phase 2 it is fixed per whole model build; in Phase 3
-    // programGenModel() flips it at the Key-XOR split round t.
+    // 当前 S 盒使用的可分迹不等式集合。
     enum ChainMode { CHAIN_K = 0, CHAIN_L = 1 };
 
 private:
-    struct BdptLocalTransition {
-        std::string sboxName;
-        ChainMode mode = CHAIN_K;
-        std::vector<int> inputVars;
-        std::vector<int> outputVars;
-    };
-
     std::string cipherName;
     std::vector<ProcedureHPtr> procedureHs;
 
@@ -71,13 +49,7 @@ private:
     int gurobiTimer = 3600 * 24;
     int gurobiThreads = 8;
 
-    // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by
-    // several operations, e.g. SIMON/Simeck where l_input feeds p1/p2/p3). The
-    // SPN ciphers handled here (PRESENT/Rectangle/GIFT) are bit-permutations with
-    // NO fan-out: every bit is read exactly once per round, so each consumeCopy()
-    // split is an identity that only bloats the model (~3008 -> ~1300 vars for
-    // PRESENT-9r) and slows Gurobi. Default off; a future SIMON/Feistel path
-    // (Phase 6) sets it true. Correctness is unchanged for fan-out-1 ciphers.
+    // 本阶段目标为论文中的 SPN 密码，默认不启用 fan-out COPY。
     bool lazyCopyEnabled = false;
 
     std::string pathPrefix;
@@ -86,37 +58,25 @@ private:
     std::string resultsPath;
 
     std::map<std::string, std::vector<int>> Box;
-    // O_k inequalities (CBDP K-trail), read from <sbox>_Reduce_Inequalities.txt.
+    // O_k 不等式：K 链 S 盒可分迹。
     std::map<std::string, std::vector<std::vector<int>>> sboxDivIneqs;
-    // O_l inequalities (BDPT L-trail), read from <sbox>_L_Reduce_Inequalities.txt.
+    // O_l 不等式：L 链 S 盒可分迹。
     std::map<std::string, std::vector<std::vector<int>>> sboxLDivIneqs;
     std::map<std::string, int> sboxInputSize;
     std::map<std::string, int> sboxOutputSize;
-    std::map<std::string, BdptTrailOracle> sboxTrailOracles;
 
-    // Active S-box inequality selector for the current round (see ChainMode).
+    // 当前链模式决定 S 盒处使用 O_k 还是 O_l。
     ChainMode chainMode = CHAIN_K;
 
-    // Key-XOR cross propagation state (Algorithm 3).
-    //   keyXorLayers        = all Key-XOR layers discovered from the IR/TAC.
-    //   selectedCrossLayer  = layer id selected for the current M_t.
-    //   currentKeyXorLayer  = layer id currently being emitted by the TAC walker.
-    //   currentRound keeps log bookkeeping.
-    //   crossLBits/crossKBits collect the selected layer variables for
-    //                         K_t* = L_t OR e_j constraints.
+    // Key-XOR cross 状态，对应论文 Algorithm 3 的 t-th Key-XOR。
     std::vector<BdptKeyXorLayer> keyXorLayers;
     int selectedCrossLayer = -1;
     int currentKeyXorLayer = -1;
     int currentRound = 0;
     std::vector<int> crossLBits;
     std::vector<int> crossKBits;
-    std::vector<BdptLocalTransition> localTransitions;
-    std::map<int, bool> abstractMay;
-    std::set<int> abstractCandidateCoords;
-    int oracleCutCounter = 0;
 
     int xCounter = 1;
-    int dCounter = 1;
 
     std::map<std::string, int> tanNameMxIndex;
     std::map<std::string, int> rtnMxIndex;
@@ -131,40 +91,21 @@ private:
     int rndParamR;
     std::map<std::string, int> consTanNameMxVal;
 
-    // Phase 5 (copied from Div2SetMILP): lazy COPY-on-read. Each read of a live
-    // MILP variable allocates (a, b) and emits x_live = x_a + x_b; `a` is the
-    // consumer's copy, `b` becomes the new live representative. Dead tails are
-    // pinned to 0 in programGenModel(), telescoping the chain into an exact
-    // N-way COPY.
+    // 惰性 COPY-on-read：读取 live 变量时拆出消费副本和新的 live 代表。
     std::map<int, int> liveChain;
     int consumeCopy(int rawIdx);
 
-    // Clear all per-build mutable walker state so MGR() can build several models
-    // (K-chain, L-chain, and later the per-t model set) from one instance. The
-    // loaded inequalities / S-box sizes / Box persist across resets.
+    // 清理单次建模状态；已加载的不等式和 S 盒尺寸保留。
     void resetState();
-    void loadBdptTrailOracles();
-    bool abstractMayReach(int idx) const;
-    void markAbstractMay(int idx, bool mayReach);
-    bool validateOracleTransitions(GRBModel& model,
-                                   BdptLocalTransition& failed) const;
-    void addBdptOracleCut(GRBModel& model,
-                          const BdptLocalTransition& failed);
 
-    // Shared .lp finalizer: reads the round-function constraints already
-    // written to modelPath, then rewrites the file as objective (Minimize sum
-    // of outputBitIndices) + initial L/activebit constraints + constraints +
-    // Binary section. Uses the current walker state (xCounter / blockSize /
-    // outputBitIndices). modeTag only labels the log line.
+    // 统一 LP 收尾：添加目标函数、初始 L 约束和 Binary 段。
     void writeLpFile(const std::string& modeTag);
 
-    // Build model M_t (Algorithm 3): use O_l before the selected Key-XOR layer,
-    // cross L_t -> K_t* at that exact IR layer, then use O_k to K_r*.
-    // Objective Minimize sum k_i^r*. Resets state.
+    // 构造 M_L 与 M_t。M_t 在选中的 Key-XOR 后从 L 链切换到 K 链。
+    void buildMLModel(const std::string& modelFile);
     void buildMtModel(int modelNumber, int keyXorLayerId, const std::string& modelFile);
 
-    // Algorithm 4 unknown test. Production uses the oracle-refined
-    // minimize-and-pin loop. `skip` contains coordinates already known unknown.
+    // Algorithm 4 的 K_q 判定：用 min-pin 枚举单位输出，不做 per-bit 求解。
     BdptSolveResult solveMtReachableCoords(const std::string& lpFile,
                                            const std::vector<int>& outIdx,
                                            const std::set<int>& skip);
@@ -172,8 +113,13 @@ private:
                                                  const std::vector<int>& outIdx,
                                                  const std::set<int>& skip);
 
-    // Orchestrate the BDPT search: build + solve each M_t, union the reachable
-    // (unknown) coordinates, and report the balanced coordinates (complement).
+    // Algorithm 4: 固定 M_L 的 L_q=e_q，枚举解数奇偶。
+    int classifyMLParity(const std::string& lpFile,
+                         const std::vector<int>& outIdx,
+                         int coord,
+                         int& solutionCount);
+
+    // 按论文 Algorithm 4 组织模型集 P 与 M_L 的整体判定。
     void searchDistinguisher();
 
 public:
@@ -203,7 +149,7 @@ public:
     void PboxGenModel(const ThreeAddressNodePtr& pbox, const ThreeAddressNodePtr& input,
                       const ThreeAddressNodePtr& output);
 
-    // Helper methods (copied verbatim from Div2SetMILP).
+    // 下面是从 Div2SetMILP 复用的 TAC 辅助方法。
     bool isConstant(ThreeAddressNodePtr threeAddressNodePtr) {
         ThreeAddressNodePtr left = threeAddressNodePtr->getLhs();
         ThreeAddressNodePtr right = threeAddressNodePtr->getRhs();
