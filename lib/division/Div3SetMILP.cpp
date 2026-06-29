@@ -2,6 +2,7 @@
 #include "util/setup.h"
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 
 extern std::map<std::string, std::vector<int>> allBox;
 extern std::string cipherName;
@@ -376,6 +377,19 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoords(
         const std::string& lpFile,
         const std::vector<int>& outIdx,
         const std::set<int>& skip) {
+    // DIAGNOSTIC SWITCH (default behaviour unchanged). The default keeps the
+    // free-output minimize-and-pin bound proof (hybrid -> min-pin). Setting the
+    // environment variable BDPT_SOLVER=perbit instead uses the paper's
+    // Stopping Rule 2: pin the whole r-th round output to e_q and test
+    // feasibility per coordinate (only the post-M_1 candidate frontier, via the
+    // shared `skip` set). This isolates whether the slow terminal "prove
+    // objective >= 2" step on long L-chains is a solving-strategy artifact
+    // (per-bit finishes fast) or an intrinsic model looseness/size problem
+    // (per-bit also stalls). Remove once the strategy question is settled.
+    const char* strat = std::getenv("BDPT_SOLVER");
+    if (strat != nullptr && std::string(strat) == "perbit") {
+        return solveMtReachableCoordsPerBit(lpFile, outIdx, skip);
+    }
     return solveMtReachableCoordsHybrid(lpFile, outIdx, skip);
 }
 
