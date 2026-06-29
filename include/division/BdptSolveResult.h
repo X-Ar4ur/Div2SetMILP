@@ -12,6 +12,8 @@ struct BdptSolveResult {
     int solveCount = 0;
     double solverSeconds = 0.0;
     int lastStatus = 0;
+    int oracleChecks = 0;
+    int oracleCuts = 0;
     std::string strategy;
     std::string reason;
     std::map<int, int> coordinateStatus;

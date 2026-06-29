@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 class BdptConfigParserTests(unittest.TestCase):
     @unittest.skipIf(shutil.which("g++") is None, "g++ is required for this parser test")
-    def test_strict_reproduction_options_are_parseable(self) -> None:
+    def test_only_engineering_runtime_options_are_parseable(self) -> None:
         source = textwrap.dedent(
             r"""
             #include "division/BdptConfig.h"
@@ -28,10 +28,6 @@ class BdptConfigParserTests(unittest.TestCase):
                 BdptRunConfig config;
                 std::string error;
                 std::vector<std::string> args = {
-                    "cross", "paper",
-                    "solver", "per-bit",
-                    "sign", "1",
-                    "repro", "1",
                     "timer", "42",
                     "threads", "3",
                 };
@@ -40,12 +36,13 @@ class BdptConfigParserTests(unittest.TestCase):
                     std::cerr << error << "\n";
                     return 1;
                 }
-                if (config.crossMode != BdptCrossMode::Paper) return 2;
-                if (config.unitSearchMode != BdptUnitSearchMode::PerBit) return 3;
-                if (!config.signLabeling) return 4;
-                if (!config.reproduction) return 5;
-                if (config.timerSeconds != 42) return 6;
-                if (config.threads != 3) return 7;
+                if (config.timerSeconds != 42) return 2;
+                if (config.threads != 3) return 3;
+                if (parseBdptOptionalArgs({"cross", "paper"}, config, error)) return 4;
+                if (error.find("unknown -div3 option") == std::string::npos) return 5;
+                if (parseBdptOptionalArgs({"solver", "min-pin"}, config, error)) return 6;
+                if (parseBdptOptionalArgs({"sign", "1"}, config, error)) return 7;
+                if (parseBdptOptionalArgs({"repro", "1"}, config, error)) return 8;
                 return 0;
             }
             """

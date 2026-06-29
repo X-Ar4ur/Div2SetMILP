@@ -37,10 +37,10 @@
 #include "Interpreter.h"
 #include "DivMILPcons.h"
 #include "BdptMILPcons.h"
-#include "BdptConfig.h"
 #include "BdptSolveResult.h"
 #include "BdptKeyXor.h"
 #include "BdptSemanticScheduler.h"
+#include "BdptTrailOracle.h"
 
 #include "gurobi_c++.h"
 
@@ -54,6 +54,13 @@ public:
     enum ChainMode { CHAIN_K = 0, CHAIN_L = 1 };
 
 private:
+    struct BdptLocalTransition {
+        std::string sboxName;
+        ChainMode mode = CHAIN_K;
+        std::vector<int> inputVars;
+        std::vector<int> outputVars;
+    };
+
     std::string cipherName;
     std::vector<ProcedureHPtr> procedureHs;
 
@@ -63,15 +70,6 @@ private:
 
     int gurobiTimer = 3600 * 24;
     int gurobiThreads = 8;
-
-    // EasyBC's production -div3 path reports NBB by default. The M_L parity
-    // labeler is retained as an internal refinement hook, but it is not part of
-    // the normal automatic distinguisher search because Table-1-style results
-    // only require balanced-bit coordinates.
-    bool signLabeling = false;
-    bool reproduction = false;
-    BdptCrossMode crossMode = BdptCrossMode::Exact;
-    BdptUnitSearchMode unitSearchMode = BdptUnitSearchMode::Hybrid;
 
     // Lazy COPY-on-read is only needed for fan-out > 1 (a state bit read by
     // several operations, e.g. SIMON/Simeck where l_input feeds p1/p2/p3). The
@@ -94,6 +92,7 @@ private:
     std::map<std::string, std::vector<std::vector<int>>> sboxLDivIneqs;
     std::map<std::string, int> sboxInputSize;
     std::map<std::string, int> sboxOutputSize;
+    std::map<std::string, BdptTrailOracle> sboxTrailOracles;
 
     // Active S-box inequality selector for the current round (see ChainMode).
     ChainMode chainMode = CHAIN_K;
@@ -113,6 +112,10 @@ private:
     int currentRound = 0;
     std::vector<int> crossLBits;
     std::vector<int> crossKBits;
+    std::vector<BdptLocalTransition> localTransitions;
+    std::map<int, bool> abstractMay;
+    std::set<int> abstractCandidateCoords;
+    int oracleCutCounter = 0;
 
     int xCounter = 1;
     int dCounter = 1;
@@ -142,6 +145,13 @@ private:
     // (K-chain, L-chain, and later the per-t model set) from one instance. The
     // loaded inequalities / S-box sizes / Box persist across resets.
     void resetState();
+    void loadBdptTrailOracles();
+    bool abstractMayReach(int idx) const;
+    void markAbstractMay(int idx, bool mayReach);
+    bool validateOracleTransitions(GRBModel& model,
+                                   BdptLocalTransition& failed) const;
+    void addBdptOracleCut(GRBModel& model,
+                          const BdptLocalTransition& failed);
 
     // Shared .lp finalizer: reads the round-function constraints already
     // written to modelPath, then rewrites the file as objective (Minimize sum
@@ -207,10 +217,6 @@ public:
 
     void setGurobiTimer(int timer) { this->gurobiTimer = timer; }
     void setGurobiThreads(int threads) { this->gurobiThreads = threads; }
-    void setSignLabeling(bool s) { this->signLabeling = s; }
-    void setReproduction(bool enabled) { this->reproduction = enabled; }
-    void setCrossMode(BdptCrossMode mode) { this->crossMode = mode; }
-    void setUnitSearchMode(BdptUnitSearchMode mode) { this->unitSearchMode = mode; }
 
     void MGR();
 

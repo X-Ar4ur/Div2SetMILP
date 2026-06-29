@@ -356,9 +356,7 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
                   << " activebits=" << _bench_activebits
                   << " subset=" << subset;
         if (subset == 3) {
-            std::cerr << " cross=" << toString(bdptConfig.crossMode)
-                      << " solver=" << toString(bdptConfig.unitSearchMode)
-                      << " mode=nbb-only"
+            std::cerr << " mode=auto-bdpt"
                       << " timer=" << bdptConfig.timerSeconds
                       << " threads=" << bdptConfig.threads;
         }
@@ -463,10 +461,6 @@ void DivTrailsMGR(std::vector<std::string> params, int subset) {
             Div3SetMILP div3set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
             div3set.setGurobiTimer(bdptConfig.timerSeconds);
             div3set.setGurobiThreads(bdptConfig.threads);
-            div3set.setSignLabeling(bdptConfig.signLabeling);
-            div3set.setReproduction(bdptConfig.reproduction);
-            div3set.setCrossMode(bdptConfig.crossMode);
-            div3set.setUnitSearchMode(bdptConfig.unitSearchMode);
             div3set.MGR();
         } else {
             Div2SetMILP div2set(procedureHs, divRounds, divActivebitsSpec, divCipherName);
