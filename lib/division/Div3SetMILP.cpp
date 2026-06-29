@@ -1,4 +1,5 @@
 #include "division/Div3SetMILP.h"
+#include "division/BdptActiveBits.h"
 #include "util/setup.h"
 #include <algorithm>
 #include <chrono>
@@ -28,123 +29,9 @@ Div3SetMILP::Div3SetMILP(std::vector<ProcedureHPtr> procedureHs, int rounds,
 }
 
 
-// Parse activebitsSpec into the list of x-variable indices to initialize to 1.
-// Copied verbatim from Div2SetMILP::resolveActiveBitVars(). See that method's
-// header comment for the full per-cipher semantics of "<N>" / "R<k>" /
-// "L<m>R<k>" / "L<m>" / "hex:<mask>".
 std::vector<int> Div3SetMILP::resolveActiveBitVars() const {
-    std::vector<int> active;
-    if (this->activebitsSpec.empty() || this->blockSize <= 0) return active;
-
-    const std::string& s = this->activebitsSpec;
-
-    // -------- hex:<HH..> explicit bitmask --------
-    if (s.size() > 4 && s.substr(0, 4) == "hex:") {
-        std::string hex = s.substr(4);
-        if (hex.size() > 2 && (hex[0] == '0' && (hex[1] == 'x' || hex[1] == 'X'))) hex = hex.substr(2);
-        std::string clean;
-        for (char c : hex) if (c != '_' && c != ' ') clean.push_back(c);
-        int bitsNeeded = this->blockSize;
-        int hexLen = (bitsNeeded + 3) / 4;
-        if ((int)clean.size() != hexLen) {
-            std::cout << "ERROR: hex mask '" << clean << "' has " << clean.size()
-                      << " nibbles; expected " << hexLen << " for block size " << bitsNeeded << std::endl;
-            assert(false);
-        }
-        for (int nib = 0; nib < hexLen; ++nib) {
-            char c = clean[nib];
-            int v;
-            if (c >= '0' && c <= '9') v = c - '0';
-            else if (c >= 'a' && c <= 'f') v = 10 + (c - 'a');
-            else if (c >= 'A' && c <= 'F') v = 10 + (c - 'A');
-            else { std::cout << "ERROR: non-hex char '" << c << "' in mask" << std::endl; assert(false); }
-            for (int b = 0; b < 4; ++b) {
-                int xi = this->blockSize - nib * 4 - b;
-                if (xi < 1) break;
-                if ((v >> (3 - b)) & 1) active.push_back(xi);
-            }
-        }
-        return active;
-    }
-
-    bool allDigits = !s.empty();
-    for (char c : s) if (!std::isdigit((unsigned char)c)) { allDigits = false; break; }
-
-    // -------- <N> pure integer: dispatch per cipher to match reference Init() --------
-    if (allDigits) {
-        int n = std::stoi(s);
-        if (n < 0 || n > this->blockSize) {
-            std::cout << "ERROR: activebits " << n << " out of range [0, " << this->blockSize << "]" << std::endl;
-            assert(false);
-        }
-
-        if (this->cipherName == "Rectangle") {
-            if (this->blockSize != 64) {
-                std::cout << "ERROR: Rectangle preset expects block size 64, got " << this->blockSize << std::endl;
-                assert(false);
-            }
-            for (int i = 0; i < n; ++i) {
-                int row = (i + 2) % 4;
-                int col = 15 - (i / 4);
-                int idx = row * 16 + col;
-                active.push_back(idx + 1);
-            }
-            return active;
-        }
-
-        if (this->cipherName == "LBlock") {
-            int wordLen = this->blockSize / 2;
-            if (wordLen != 32) {
-                std::cout << "ERROR: LBlock preset expects block size 64, got " << this->blockSize << std::endl;
-                assert(false);
-            }
-            auto halfIdx = [&](int i) -> int {
-                return (7 - (i / 4)) * 4 + (i % 4);
-            };
-            int yActive = std::min(n, 32);
-            int xActive = std::max(0, n - 32);
-            for (int i = 0; i < yActive; ++i) active.push_back(wordLen + halfIdx(i) + 1);
-            for (int i = 0; i < xActive; ++i) active.push_back(halfIdx(i) + 1);
-            return active;
-        }
-
-        // Default (PRESENT / GIFT / TWINE): top N x-variables active.
-        for (int i = 0; i < n; ++i) active.push_back(this->blockSize - i);
-        return active;
-    }
-
-    // -------- L<m>R<k> Feistel/SIMON spec --------
-    int wordLen = this->blockSize / 2;
-    int lCount = 0, rCount = 0;
-    size_t p = 0;
-
-    if (p < s.size() && s[p] == 'L') {
-        ++p;
-        size_t start = p;
-        while (p < s.size() && std::isdigit((unsigned char)s[p])) ++p;
-        if (start == p) { std::cout << "ERROR: malformed L<m> in '" << s << "'" << std::endl; assert(false); }
-        lCount = std::stoi(s.substr(start, p - start));
-    }
-    if (p < s.size() && s[p] == 'R') {
-        ++p;
-        size_t start = p;
-        while (p < s.size() && std::isdigit((unsigned char)s[p])) ++p;
-        if (start == p) { std::cout << "ERROR: malformed R<k> in '" << s << "'" << std::endl; assert(false); }
-        rCount = std::stoi(s.substr(start, p - start));
-    }
-    if (p != s.size() || (lCount == 0 && rCount == 0)) {
-        std::cout << "ERROR: unrecognized activebits spec '" << s << "'. "
-                  << "Use <N>, R<k>, L<m>, L<m>R<k>, or hex:<mask>." << std::endl;
-        assert(false);
-    }
-    if (lCount < 0 || lCount > wordLen || rCount < 0 || rCount > wordLen) {
-        std::cout << "ERROR: L/R counts out of range [0, " << wordLen << "] in '" << s << "'" << std::endl;
-        assert(false);
-    }
-
-    for (int i = 0; i < rCount; ++i) active.push_back(this->blockSize - i);
-    for (int i = 0; i < lCount; ++i) active.push_back(wordLen - i);
-    return active;
+    return resolveBdptActiveBitVars(this->cipherName, this->blockSize,
+                                    this->activebitsSpec);
 }
 
 
@@ -377,83 +264,7 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoords(
         const std::string& lpFile,
         const std::vector<int>& outIdx,
         const std::set<int>& skip) {
-    // DIAGNOSTIC SWITCH (default behaviour unchanged). The default keeps the
-    // free-output minimize-and-pin bound proof (hybrid -> min-pin). Setting the
-    // environment variable BDPT_SOLVER=perbit instead uses the paper's
-    // Stopping Rule 2: pin the whole r-th round output to e_q and test
-    // feasibility per coordinate (only the post-M_1 candidate frontier, via the
-    // shared `skip` set). This isolates whether the slow terminal "prove
-    // objective >= 2" step on long L-chains is a solving-strategy artifact
-    // (per-bit finishes fast) or an intrinsic model looseness/size problem
-    // (per-bit also stalls). Remove once the strategy question is settled.
-    const char* strat = std::getenv("BDPT_SOLVER");
-    if (strat != nullptr && std::string(strat) == "perbit") {
-        return solveMtReachableCoordsPerBit(lpFile, outIdx, skip);
-    }
-    return solveMtReachableCoordsHybrid(lpFile, outIdx, skip);
-}
-
-
-BdptSolveResult Div3SetMILP::solveMtReachableCoordsPerBit(
-        const std::string& lpFile,
-        const std::vector<int>& outIdx,
-        const std::set<int>& skip) {
-    BdptSolveResult result;
-
-    GRBEnv env = GRBEnv(true);
-    env.set(GRB_IntParam_Threads, this->gurobiThreads);
-    env.set(GRB_IntParam_OutputFlag, 0);
-    env.start();
-    GRBModel model = GRBModel(env, lpFile);
-    model.set(GRB_DoubleParam_TimeLimit, this->gurobiTimer);
-    model.set(GRB_DoubleParam_NodefileStart, 0.5);
-    model.set(GRB_IntParam_SolutionLimit, 1);
-    result.strategy = "per-bit";
-
-    std::vector<GRBVar> outVars(outIdx.size());
-    for (int j = 0; j < (int)outIdx.size(); ++j) {
-        outVars[j] = model.getVarByName("x" + std::to_string(outIdx[j]));
-    }
-
-    for (int q = 0; q < (int)outVars.size(); ++q) {
-        if (skip.count(q)) continue;
-
-        for (int j = 0; j < (int)outVars.size(); ++j) {
-            const double fixed = (j == q) ? 1.0 : 0.0;
-            outVars[j].set(GRB_DoubleAttr_LB, fixed);
-            outVars[j].set(GRB_DoubleAttr_UB, fixed);
-        }
-        model.update();
-
-        auto solveStart = std::chrono::steady_clock::now();
-        model.optimize();
-        auto solveEnd = std::chrono::steady_clock::now();
-        result.solveCount++;
-        result.solverSeconds += std::chrono::duration<double>(
-            solveEnd - solveStart).count();
-
-        int status = model.get(GRB_IntAttr_Status);
-        result.lastStatus = status;
-        result.coordinateStatus[q] = status;
-        int solCount = model.get(GRB_IntAttr_SolCount);
-
-        if (status == GRB_INFEASIBLE) {
-            continue;
-        }
-        if (solCount > 0) {
-            // One incumbent is a constructive proof that e_q is reachable; an
-            // optimality proof is unnecessary for this feasibility question.
-            result.reachable.insert(q);
-            continue;
-        }
-
-        result.markIncomplete(
-            status, "unsettled-per-bit-feasibility-at-coordinate-" +
-                    std::to_string(q));
-        break;
-    }
-
-    return result;
+    return solveMtReachableCoordsMinPin(lpFile, outIdx, skip);
 }
 
 
@@ -561,100 +372,6 @@ BdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin(
     }
     return result;
 }
-
-
-BdptSolveResult Div3SetMILP::solveMtReachableCoordsHybrid(
-        const std::string& lpFile,
-        const std::vector<int>& outIdx,
-        const std::set<int>& skip) {
-    // The production default follows the paper/reference SolveModel strategy:
-    // keep one minimize-and-pin model alive, pin every reachable unit output,
-    // and pay one terminal proof instead of many per-coordinate infeasibility
-    // proofs. Falling back to per-bit when many candidates remain recreates the
-    // slow path seen on PRESENT Mt4.
-    BdptSolveResult result = solveMtReachableCoordsMinPin(lpFile, outIdx, skip);
-    result.strategy = "hybrid-min-pin";
-    return result;
-}
-
-
-// Algorithm 4 second half (Stopping Rule 2 / lines 14-20): decide the parity of
-// the q-th output bit by COUNTING the r-round pure-L trails of M_L that end at
-// the unit vector ell^r = e_q. Distinct binary solutions of the MILP are in
-// bijection with division trails for L, so Gurobi's solution pool gives the
-// trail count; only its parity matters (odd => sum 1, even => sum 0). Returns
-// a negative code when the count cannot be trusted (see header), so the caller
-// keeps such a bit as 'b' instead of mislabelling it (soundness over recall).
-int Div3SetMILP::classifyMLParity(const std::string& mlLpFile,
-                                  const std::vector<int>& mlOutIdx,
-                                  int coord, long long& solCount) {
-    solCount = 0;
-
-    GRBEnv env = GRBEnv(true);
-    env.set(GRB_IntParam_Threads, this->gurobiThreads);
-    env.set(GRB_IntParam_OutputFlag, 0);
-    env.start();
-    GRBModel model = GRBModel(env, mlLpFile);
-
-    // Sanity check: the trail/solution bijection breaks if any binary variable
-    // appears in no constraint -- such a variable is free to take both values,
-    // doubling every count and silently forcing every parity to "even". Refuse
-    // to label anything from this model rather than report wrong signs.
-    int numVars = model.get(GRB_IntAttr_NumVars);
-    for (int i = 0; i < numVars; ++i) {
-        GRBVar v = model.getVar(i);
-        if (model.getCol(v).size() == 0) {
-            std::cout << "ERROR: M_L sanity check failed: variable "
-                      << v.get(GRB_StringAttr_VarName)
-                      << " appears in no constraint; parity counts cannot be trusted."
-                      << std::endl;
-            return -3;
-        }
-    }
-
-    // Paper Algorithm 4 assumes an exact solution count for M_L. Use the same
-    // user-configurable budget as every other solve (`timer N`); if the
-    // enumeration cannot finish inside it, the bit keeps the sound 'b'
-    // fallback instead of getting a wrong label.
-    model.set(GRB_DoubleParam_TimeLimit, (double)this->gurobiTimer);
-
-    // The .lp objective is kept as written (Minimize sum ell_i^r, paper
-    // Algorithm 4 line 2). With the whole output fixed to e_q it is the
-    // constant 1 on the feasible region, and PoolGap = infinity below makes
-    // the pool enumerate every feasible solution regardless of objective.
-
-    // Fix ell^r = e_q: outIdx[coord] = 1, every other output coordinate = 0.
-    for (int j = 0; j < (int)mlOutIdx.size(); ++j) {
-        GRBVar v = model.getVarByName("x" + std::to_string(mlOutIdx[j]));
-        double b = (j == coord) ? 1.0 : 0.0;
-        v.set(GRB_DoubleAttr_LB, b);
-        v.set(GRB_DoubleAttr_UB, b);
-    }
-
-    // Systematically enumerate all feasible 0-1 solutions (each = one L-trail).
-    // The cap is large enough for the exact parity in normal cases but bounds
-    // memory/time; if the count reaches it, the true parity is unknown.
-    const int POOL_CAP = 2000000;
-    model.set(GRB_IntParam_PoolSearchMode, 2);
-    model.set(GRB_IntParam_PoolSolutions, POOL_CAP);
-    model.set(GRB_DoubleParam_PoolGap, GRB_INFINITY);
-    model.optimize();
-
-    int status = model.get(GRB_IntAttr_Status);
-    if (status == GRB_INFEASIBLE) {
-        solCount = 0;       // no L-trail reaches e_q => even => sum 0 (balanced)
-        return 0;
-    }
-    if (status != GRB_OPTIMAL) {
-        // TIME_LIMIT or other: the enumeration is incomplete -> parity unknown.
-        solCount = model.get(GRB_IntAttr_SolCount);
-        return -1;
-    }
-    solCount = model.get(GRB_IntAttr_SolCount);
-    if (solCount >= POOL_CAP) return -2;     // capped: true count (parity) unknown
-    return (int)(solCount & 1LL);
-}
-
 
 void Div3SetMILP::searchDistinguisher() {
     auto _bench_t0 = std::chrono::steady_clock::now();
@@ -895,8 +612,7 @@ void Div3SetMILP::writeLpFile(const std::string& modeTag) {
         assert(false);
     }
 
-    // Objective: Minimize sum of final-round output bits (K_r* for M_t and the
-    // K-chain anchor; L_r for the M_L L-chain).
+    // Objective: Minimize sum of final-round output bits (K_r* for M_t).
     model << "Minimize\n";
     for (int i = 0; i < (int)this->outputBitIndices.size(); ++i) {
         model << "x" << this->outputBitIndices[i];
@@ -941,36 +657,6 @@ void Div3SetMILP::writeLpFile(const std::string& modeTag) {
 
     std::cout << modeTag << " MILP model written to: " << this->modelPath
               << "  (x1.." << (this->xCounter - 1) << ")" << std::endl;
-}
-
-
-void Div3SetMILP::buildChainModel(ChainMode mode, const std::string& modelFile) {
-    auto _bench_t0 = std::chrono::steady_clock::now();
-
-    resetState();
-    this->selectedCrossLayer = -1;  // pure single-mode (no cross)
-    this->pureMode = mode;
-    this->chainMode = mode;
-    this->modelPath = modelFile;
-
-    std::ofstream clearFile(this->modelPath, std::ios::trunc);
-    clearFile.close();
-
-    programGenModel();
-
-    const char* modeTag = (mode == CHAIN_L) ? "L-chain" : "K-chain";
-    writeLpFile(modeTag);
-
-    auto _bench_t1 = std::chrono::steady_clock::now();
-    long long _bench_ms = std::chrono::duration_cast<std::chrono::milliseconds>(_bench_t1 - _bench_t0).count();
-    std::cerr << "[BENCH] phase=build cipher=" << this->cipherName
-              << " subset=3 chain=" << (mode == CHAIN_L ? "L" : "K")
-              << " rounds=" << this->rounds
-              << " activebits=" << this->activebitsSpec
-              << " elapsed_ms=" << _bench_ms
-              << " n_xvars=" << (this->xCounter - 1)
-              << " n_dvars=" << (this->dCounter - 1)
-              << " block_size=" << this->blockSize << std::endl;
 }
 
 
@@ -1032,15 +718,10 @@ void Div3SetMILP::programGenModel() {
                         this->blockSize = tempSizeCounter;
                         tempSizeCounter = 0;
 
-                        // Round bookkeeping for Key-XOR cross propagation.
-                        // Pure builds use the fixed pureMode. M_t builds start
-                        // in L-chain mode and switch to K-chain exactly when
-                        // roundFunctionGenModel emits the selected IR Key-XOR
-                        // layer.
+                        // M_t builds start in L-chain mode and switch to K-chain
+                        // exactly when roundFunctionGenModel emits the selected
+                        // IR Key-XOR layer.
                         this->currentRound = ++processed;
-                        if (this->selectedCrossLayer < 0) {
-                            this->chainMode = this->pureMode;
-                        }
 
                         roundFuncId = ele->getLhs()->getNodeName().substr(0, ele->getLhs()->getNodeName().find("@"));
                         for (const auto& tproc : this->procedureHs) {

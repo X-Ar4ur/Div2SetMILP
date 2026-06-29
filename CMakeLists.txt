@@ -59,6 +59,7 @@ ADD_EXECUTABLE(EasyBC
         include/division/Div2SetMILP.h
         include/division/Div3SetMILP.h
         include/division/BdptConfig.h
+        include/division/BdptActiveBits.h
         include/division/BdptSolveResult.h
         include/division/BdptKeyXor.h
         include/division/BdptSemanticScheduler.h
@@ -91,6 +92,7 @@ ADD_EXECUTABLE(EasyBC
         lib/division/DivMILPcons.cpp
         lib/division/BdptMILPcons.cpp
         lib/division/BdptConfig.cpp
+        lib/division/BdptActiveBits.cpp
         lib/division/BdptKeyXor.cpp
         lib/division/BdptSemanticScheduler.cpp
         lib/division/BdptTrailOracle.cpp

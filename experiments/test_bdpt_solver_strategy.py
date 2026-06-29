@@ -11,20 +11,22 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class BdptSolverStrategyTests(unittest.TestCase):
-    def test_hybrid_solver_does_not_fall_back_to_per_bit(self) -> None:
+    def test_dispatcher_uses_single_min_pin_production_path(self) -> None:
         source = (ROOT / "lib" / "division" / "Div3SetMILP.cpp").read_text(
             encoding="utf-8"
         )
         match = re.search(
-            r"BdptSolveResult Div3SetMILP::solveMtReachableCoordsHybrid"
-            r"\([\s\S]*?\n\}\n\n\n// Algorithm 4",
+            r"BdptSolveResult Div3SetMILP::solveMtReachableCoords"
+            r"\([\s\S]*?\n\}\n\n\nBdptSolveResult Div3SetMILP::solveMtReachableCoordsMinPin",
             source,
         )
         self.assertIsNotNone(match)
-        hybrid_body = match.group(0)
+        dispatch_body = match.group(0)
 
-        self.assertNotIn("solveMtReachableCoordsPerBit", hybrid_body)
-        self.assertNotIn("hybrid+per-bit", hybrid_body)
+        self.assertIn("return solveMtReachableCoordsMinPin", dispatch_body)
+        self.assertNotIn("getenv", dispatch_body)
+        self.assertNotIn("solveMtReachableCoordsPerBit", source)
+        self.assertNotIn("solveMtReachableCoordsHybrid", source)
 
 
 if __name__ == "__main__":

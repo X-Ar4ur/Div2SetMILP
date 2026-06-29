@@ -99,16 +99,14 @@ private:
 
     // Key-XOR cross propagation state (Algorithm 3).
     //   keyXorLayers        = all Key-XOR layers discovered from the IR/TAC.
-    //   selectedCrossLayer  = layer id selected for the current M_t, or -1 for
-    //                         pure K/L builds.
+    //   selectedCrossLayer  = layer id selected for the current M_t.
     //   currentKeyXorLayer  = layer id currently being emitted by the TAC walker.
-    //   pureMode/currentRound keep pure-chain and log bookkeeping.
+    //   currentRound keeps log bookkeeping.
     //   crossLBits/crossKBits collect the selected layer variables for
     //                         K_t* = L_t OR e_j constraints.
     std::vector<BdptKeyXorLayer> keyXorLayers;
     int selectedCrossLayer = -1;
     int currentKeyXorLayer = -1;
-    ChainMode pureMode = CHAIN_K;
     int currentRound = 0;
     std::vector<int> crossLBits;
     std::vector<int> crossKBits;
@@ -160,50 +158,19 @@ private:
     // outputBitIndices). modeTag only labels the log line.
     void writeLpFile(const std::string& modeTag);
 
-    // Build one pure single-mode model (no Key-XOR cross) into modelFile.
-    // CHAIN_K -> Div2-equivalent K-chain diff anchor; CHAIN_L -> M_L (the full
-    // r-round L propagation used by Algorithm 4's parity test). Resets state.
-    void buildChainModel(ChainMode mode, const std::string& modelFile);
-
     // Build model M_t (Algorithm 3): use O_l before the selected Key-XOR layer,
     // cross L_t -> K_t* at that exact IR layer, then use O_k to K_r*.
     // Objective Minimize sum k_i^r*. Resets state.
     void buildMtModel(int modelNumber, int keyXorLayerId, const std::string& modelFile);
 
-    // Algorithm 4 unknown test. The dispatcher selects per-coordinate
-    // feasibility, explicit minimize-and-pin, or the production hybrid wrapper
-    // over the paper/reference minimize-and-pin loop. All return structured
-    // completeness, status and timing data; `skip` contains coordinates already
-    // known unknown.
+    // Algorithm 4 unknown test. Production uses the oracle-refined
+    // minimize-and-pin loop. `skip` contains coordinates already known unknown.
     BdptSolveResult solveMtReachableCoords(const std::string& lpFile,
                                            const std::vector<int>& outIdx,
                                            const std::set<int>& skip);
-    BdptSolveResult solveMtReachableCoordsPerBit(const std::string& lpFile,
-                                                 const std::vector<int>& outIdx,
-                                                 const std::set<int>& skip);
     BdptSolveResult solveMtReachableCoordsMinPin(const std::string& lpFile,
                                                  const std::vector<int>& outIdx,
                                                  const std::set<int>& skip);
-    BdptSolveResult solveMtReachableCoordsHybrid(const std::string& lpFile,
-                                                 const std::vector<int>& outIdx,
-                                                 const std::set<int>& skip);
-
-    // Algorithm 4 (parity test): count the r-round pure-L trails of M_L that
-    // reach ell^r = e_coord (fix outIdx[coord]=1, all other outputs=0) and return
-    // the parity of that count. mlLpFile is the M_L model written by
-    // buildChainModel(CHAIN_L, ...); mlOutIdx[j] is the MILP var of L_r
-    // coordinate j. Returns:
-    //    0  even number of solutions  => q-th output bit sum is 0 (balanced),
-    //    1  odd  number of solutions  => q-th output bit sum is 1 (constant one),
-    //   -1  the solve hit the time budget (gurobiTimer) before enumerating all
-    //       solutions (parity unknown; the bit stays balanced, labelled 'b'),
-    //   -2  the count hit the solution-pool cap (parity unknown, 'b'),
-    //   -3  M_L failed the free-binary-variable sanity check (a variable in no
-    //       constraint doubles every count, so no parity can be trusted; 'b').
-    // solCount returns the enumerated (possibly capped) count for logging.
-    int classifyMLParity(const std::string& mlLpFile,
-                         const std::vector<int>& mlOutIdx,
-                         int coord, long long& solCount);
 
     // Orchestrate the BDPT search: build + solve each M_t, union the reachable
     // (unknown) coordinates, and report the balanced coordinates (complement).

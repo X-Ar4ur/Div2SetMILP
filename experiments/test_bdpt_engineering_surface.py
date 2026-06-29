@@ -15,8 +15,12 @@ class BdptEngineeringSurfaceTests(unittest.TestCase):
         header = (ROOT / "include" / "division" / "Div3SetMILP.h").read_text(
             encoding="utf-8"
         )
+        source = (ROOT / "lib" / "division" / "Div3SetMILP.cpp").read_text(
+            encoding="utf-8"
+        )
 
         forbidden = [
+            "BDPT_SOLVER",
             "setSignLabeling",
             "setReproduction",
             "setCrossMode",
@@ -29,6 +33,7 @@ class BdptEngineeringSurfaceTests(unittest.TestCase):
         for token in forbidden:
             self.assertNotIn(token, main_cpp)
             self.assertNotIn(token, header)
+            self.assertNotIn(token, source)
 
 
 if __name__ == "__main__":
