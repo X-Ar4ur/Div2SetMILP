@@ -592,18 +592,26 @@ void Div3SetMILP::searchDistinguisher() {
                        + "_" + this->activebitsSpec + "_subset3";
 
     // Union of unknown output coordinates across the model set P. Algorithm 3
-    // constructs M_t for the former Key-XOR operations and Remark 2 ignores the
-    // final Key-XOR, so the IR-derived model set is every discovered layer except
-    // the last one.
+    // constructs M_t after t rounds of f_e, so the selected Key-XOR layers must
+    // follow the IR semantics. For ARK-at-input SPNs (PRESENT/Rectangle) this
+    // skips the initial whitening-like layer; for ARK-at-output rounds it drops
+    // the final Key-XOR as in Remark 2.
     this->keyXorLayers = discoverBdptKeyXorLayers(this->procedureHs, this->rounds);
     if (this->keyXorLayers.empty()) {
         std::cout << "ERROR: No Key-XOR layer was discovered from the IR; "
                   << "BDPT model set P cannot be built soundly." << std::endl;
         assert(false);
     }
+    std::vector<BdptScheduledCrossLayer> scheduledCrossLayers =
+        scheduleBdptCrossLayers(this->keyXorLayers, this->rounds);
+    if (scheduledCrossLayers.empty()) {
+        std::cout << "ERROR: No semantic Key-XOR cross layer was selected; "
+                  << "BDPT model set P cannot be built soundly." << std::endl;
+        assert(false);
+    }
 
     std::set<int> unknownCoords;
-    int nModels = (int)this->keyXorLayers.size() - 1;
+    int nModels = (int)scheduledCrossLayers.size();
     int modelsAttempted = 0;
     bool modelSetComplete = true;
     std::string incompleteReason;
@@ -615,20 +623,31 @@ void Div3SetMILP::searchDistinguisher() {
     result << "Cross mode: " << toString(this->crossMode)
            << ", Unit solver: " << toString(this->unitSearchMode)
            << ", Output: NBB-only\n";
-    result << "Key-XOR layers discovered from IR: " << this->keyXorLayers.size()
-           << " (last layer ignored by Remark 2)\n";
+    result << "Key-XOR layers discovered from IR: " << this->keyXorLayers.size() << "\n";
     for (const auto& layer : this->keyXorLayers) {
         result << "  keyxor#" << layer.id
                << "@round " << layer.round
                << " function=" << layer.roundFunction
-               << " xor_nodes=" << layer.xorNodeNames.size() << "\n";
+               << " xor_nodes=" << layer.xorNodeNames.size()
+               << " first_node=" << layer.firstNodeIndex
+               << " before_round_core=" << (layer.beforeRoundCore ? 1 : 0)
+               << "\n";
+    }
+    result << "Semantic model scheduler selected " << nModels << " cross layers:\n";
+    for (const auto& item : scheduledCrossLayers) {
+        result << "  M_" << item.modelNumber
+               << " -> keyxor#" << item.layer.id
+               << "@round " << item.layer.round
+               << " fe_rounds_before_cross=" << item.feRoundsBeforeCross
+               << "\n";
     }
     result << "Model set P = {M_1, ..., M_" << nModels << "}\n\n";
     result.close();
 
-    for (int tau = 1; tau <= nModels; ++tau) {
+    for (const BdptScheduledCrossLayer& scheduled : scheduledCrossLayers) {
+        const int tau = scheduled.modelNumber;
         modelsAttempted++;
-        const BdptKeyXorLayer& layer = this->keyXorLayers[tau - 1];
+        const BdptKeyXorLayer& layer = scheduled.layer;
         std::string lpFile = base + "_Mt" + std::to_string(tau) + ".lp";
         buildMtModel(tau, layer.id, lpFile);
         // outputBitIndices now holds M_t's K_r* coordinates (index j = coord j).
@@ -660,7 +679,9 @@ void Div3SetMILP::searchDistinguisher() {
 
         std::ofstream r(this->resultsPath, std::ios::app);
         r << "M_" << tau << " (keyxor#" << layer.id << "@round "
-          << layer.round << "): reachable unit coords = {";
+          << layer.round
+          << ", fe_rounds_before_cross=" << scheduled.feRoundsBeforeCross
+          << "): reachable unit coords = {";
         bool first = true;
         for (int j : reach) { r << (first ? "" : ",") << j; first = false; }
         r << "}  (" << reach.size() << ")"
@@ -695,6 +716,7 @@ void Div3SetMILP::searchDistinguisher() {
                   << " subset=3 model=Mt" << tau
                   << " cross_layer=" << layer.id
                   << " cross_round=" << layer.round
+                  << " fe_rounds_before_cross=" << scheduled.feRoundsBeforeCross
                   << " strategy=" << solveResult.strategy
                   << " skipped_unknowns=" << skippedBefore
                   << " remaining_candidates=" << remainingCandidates

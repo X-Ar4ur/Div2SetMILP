@@ -40,6 +40,7 @@
 #include "BdptConfig.h"
 #include "BdptSolveResult.h"
 #include "BdptKeyXor.h"
+#include "BdptSemanticScheduler.h"
 
 #include "gurobi_c++.h"
 

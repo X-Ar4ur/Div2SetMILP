@@ -1,5 +1,7 @@
 #include "division/BdptKeyXor.h"
 
+#include "ProcedureH.h"
+
 #include <cctype>
 #include <map>
 #include <set>
@@ -75,14 +77,34 @@ bool isKeyOperand(const ThreeAddressNodePtr& node,
     return false;
 }
 
+bool isRoundCoreNode(const ThreeAddressNodePtr& node,
+                     const ProcedureHPtr& procedure) {
+    if (!node) return false;
+    if (matchBdptKeyXorNode(node, procedure).isKeyXor) return false;
+
+    const auto op = node->getOp();
+    if (op == ASTNode::XOR || op == ASTNode::AND || op == ASTNode::OR ||
+        op == ASTNode::BOXOP || op == ASTNode::PUSH ||
+        op == ASTNode::ADD || op == ASTNode::MINUS || op == ASTNode::NOT) {
+        return true;
+    }
+    if (op == ASTNode::SYMBOLINDEX && node->getLhs() &&
+        node->getLhs()->getOp() == ASTNode::FFTIMES) {
+        return true;
+    }
+    return false;
+}
+
 std::vector<BdptKeyXorLayer> discoverRoundLayers(
         const ProcedureHPtr& procedure,
         int round,
         int& nextLayerId) {
     std::vector<BdptKeyXorLayer> layers;
     bool inKeyXorLayer = false;
+    bool seenRoundCore = false;
 
-    for (const auto& node : procedure->getBlock()) {
+    for (int i = 0; i < (int)procedure->getBlock().size(); ++i) {
+        const auto& node = procedure->getBlock().at(i);
         const BdptKeyXorMatch match = matchBdptKeyXorNode(node, procedure);
         if (match.isKeyXor) {
             if (!inKeyXorLayer) {
@@ -90,12 +112,15 @@ std::vector<BdptKeyXorLayer> discoverRoundLayers(
                 layer.id = nextLayerId++;
                 layer.round = round;
                 layer.roundFunction = procedure->getName();
+                layer.firstNodeIndex = i;
+                layer.beforeRoundCore = !seenRoundCore;
                 layers.push_back(layer);
                 inKeyXorLayer = true;
             }
             layers.back().xorNodeNames.push_back(node->getNodeName());
         } else {
             inKeyXorLayer = false;
+            if (isRoundCoreNode(node, procedure)) seenRoundCore = true;
         }
     }
 
