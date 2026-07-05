@@ -1,22 +1,8 @@
 #include "division/BdptActiveBits.h"
 
-#include <algorithm>
 #include <cassert>
 #include <cctype>
 #include <iostream>
-#include <set>
-
-namespace {
-
-std::vector<int> allExcept(int blockSize, int inactiveVar) {
-    std::vector<int> active;
-    for (int xi = 1; xi <= blockSize; ++xi) {
-        if (xi != inactiveVar) active.push_back(xi);
-    }
-    return active;
-}
-
-} // namespace
 
 std::vector<int> resolveBdptActiveBitVars(const std::string& cipherName,
                                           int blockSize,
@@ -85,11 +71,7 @@ std::vector<int> resolveBdptActiveBitVars(const std::string& cipherName,
                           << blockSize << std::endl;
                 assert(false);
             }
-            // BDPT Appendix F.10 uses the 2^63 RECTANGLE plaintext layout with
-            // the only constant bit in the first 16-bit row. In EasyBC's
-            // row-major x1..x64 state, that is row 0, column 15 -> x16.
-            if (n == 63) return allExcept(blockSize, 16);
-
+            // Rectangle 沿用 Div2SetMILP/rectangle.py 的 4x16 bit-slice 初始布局。
             for (int i = 0; i < n; ++i) {
                 int row = (i + 2) % 4;
                 int col = 15 - (i / 4);

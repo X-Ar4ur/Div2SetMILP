@@ -28,10 +28,11 @@ class BdptActiveBitsTests(unittest.TestCase):
                     resolveBdptActiveBitVars("Rectangle", 64, "63");
 
                 if (active.size() != 63) return 1;
-                if (std::find(active.begin(), active.end(), 16) != active.end()) return 2;
+                if (std::find(active.begin(), active.end(), 16) == active.end()) return 2;
+                if (std::find(active.begin(), active.end(), 17) != active.end()) return 3;
                 for (int i = 1; i <= 64; ++i) {
-                    if (i == 16) continue;
-                    if (std::find(active.begin(), active.end(), i) == active.end()) return 3;
+                    if (i == 17) continue;
+                    if (std::find(active.begin(), active.end(), i) == active.end()) return 4;
                 }
                 return 0;
             }
