@@ -35,6 +35,33 @@ class BdptEngineeringSurfaceTests(unittest.TestCase):
             self.assertNotIn(token, header)
             self.assertNotIn(token, source)
 
+    def test_div3_uses_exact_copy_on_read_like_div2(self) -> None:
+        header = (ROOT / "include" / "division" / "Div3SetMILP.h").read_text(
+            encoding="utf-8"
+        )
+        source = (ROOT / "lib" / "division" / "Div3SetMILP.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertNotIn("lazyCopyEnabled", header)
+        self.assertNotIn("lazyCopyEnabled", source)
+        self.assertIn("DivMILPcons::divCopyC", source)
+        self.assertNotIn("if (!this->lazyCopyEnabled) return live;", source)
+
+    def test_div3_keyxor_cross_uses_current_live_tail(self) -> None:
+        source = (ROOT / "lib" / "division" / "Div3SetMILP.cpp").read_text(
+            encoding="utf-8"
+        )
+        selected_cross = source[
+            source.index("if (this->selectedCrossLayer >= 0 &&") :
+            source.index("} else {", source.index("if (this->selectedCrossLayer >= 0 &&"))
+        ]
+
+        self.assertIn(
+            "while (this->liveChain.count(lIdx)) lIdx = this->liveChain[lIdx];",
+            selected_cross,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -49,9 +49,6 @@ private:
     int gurobiTimer = 3600 * 24;
     int gurobiThreads = 8;
 
-    // 本阶段目标为论文中的 SPN 密码，默认不启用 fan-out COPY。
-    bool lazyCopyEnabled = false;
-
     std::string pathPrefix;
     std::string runDir;
     std::string modelPath;

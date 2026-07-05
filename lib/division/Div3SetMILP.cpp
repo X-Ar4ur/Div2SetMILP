@@ -35,8 +35,6 @@ int Div3SetMILP::consumeCopy(int rawIdx) {
     if (rawIdx <= 0) return rawIdx;
     int live = rawIdx;
     while (this->liveChain.count(live)) live = this->liveChain[live];
-    // SPN (no fan-out): skip the identity split entirely (see header note).
-    if (!this->lazyCopyEnabled) return live;
     int a = this->xCounter++;
     int b = this->xCounter++;
     DivMILPcons::divCopyC(this->modelPath, live, std::vector<int>{a, b});
@@ -790,6 +788,7 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
                 if (this->selectedCrossLayer >= 0 &&
                     this->currentKeyXorLayer == this->selectedCrossLayer) {
                     int lIdx = it->second;
+                    while (this->liveChain.count(lIdx)) lIdx = this->liveChain[lIdx];
                     int kIdx = this->xCounter++;
                     this->crossLBits.push_back(lIdx);
                     this->crossKBits.push_back(kIdx);
