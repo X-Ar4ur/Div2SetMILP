@@ -60,6 +60,7 @@ void Div3SetMILP::resetState() {
     this->currentRound = 0;
     this->crossLBits.clear();
     this->crossKBits.clear();
+    this->protectedTailIndices.clear();
 }
 
 
@@ -742,6 +743,7 @@ void Div3SetMILP::programGenModel() {
     for (int tail : chainValues) {
         if (chainKeys.count(tail)) continue;
         if (outSet.count(tail)) continue;
+        if (this->protectedTailIndices.count(tail)) continue;
         modelApp << "x" << tail << " = 0\n";
     }
     modelApp.close();
@@ -915,6 +917,7 @@ void Div3SetMILP::roundFunctionGenModel(const ProcedureHPtr &procedureH) {
     // 论文 Algorithm 3 第 9-10 行：L_t 在 key 覆盖位置不全为 1，
     // 且 K_t* 按位支配 L_t。
     if (this->selectedCrossLayer >= 0 && !this->crossLBits.empty()) {
+        for (int idx : this->crossLBits) this->protectedTailIndices.insert(idx);
         BdptMILPcons::bdptCrossPaperC(
             this->modelPath, this->crossKBits, this->crossLBits);
         this->crossLBits.clear();

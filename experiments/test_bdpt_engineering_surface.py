@@ -62,6 +62,24 @@ class BdptEngineeringSurfaceTests(unittest.TestCase):
             selected_cross,
         )
 
+    def test_div3_keyxor_cross_l_tails_are_not_pinned_dead(self) -> None:
+        header = (ROOT / "include" / "division" / "Div3SetMILP.h").read_text(
+            encoding="utf-8"
+        )
+        source = (ROOT / "lib" / "division" / "Div3SetMILP.cpp").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("protectedTailIndices", header)
+        self.assertIn("protectedTailIndices.clear()", source)
+        self.assertIn("protectedTailIndices.insert(idx)", source)
+
+        tail_pinning = source[
+            source.index("for (int tail : chainValues)") :
+            source.index("modelApp.close()", source.index("for (int tail : chainValues)"))
+        ]
+        self.assertIn("this->protectedTailIndices.count(tail)", tail_pinning)
+
 
 if __name__ == "__main__":
     unittest.main()

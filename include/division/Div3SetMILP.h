@@ -72,6 +72,8 @@ private:
     int currentRound = 0;
     std::vector<int> crossLBits;
     std::vector<int> crossKBits;
+    // Key-XOR cross 的 L 端变量虽然不是最终输出，但仍被 cross 约束引用，不能作为死 COPY 尾固定为 0。
+    std::set<int> protectedTailIndices;
 
     int xCounter = 1;
 
